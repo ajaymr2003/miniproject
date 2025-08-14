@@ -1,8 +1,22 @@
 import 'package:flutter/material.dart';
 
-class EVUserDashboard extends StatelessWidget {
+class EVUserDashboard extends StatefulWidget {
   final String role;
   const EVUserDashboard({super.key, required this.role});
+
+  @override
+  State<EVUserDashboard> createState() => _EVUserDashboardState();
+}
+
+class _EVUserDashboardState extends State<EVUserDashboard> {
+  int _selectedIndex = 0;
+
+  void _onItemTapped(int index) {
+    setState(() {
+      _selectedIndex = index;
+      // TODO: Add navigation logic for each tab if needed
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -66,7 +80,7 @@ class EVUserDashboard extends StatelessWidget {
                         ),
                         onPressed: () {},
                         child: const Text("Enable"),
-                      )
+                      ),
                     ],
                   ),
                 ),
@@ -95,12 +109,21 @@ class EVUserDashboard extends StatelessWidget {
               child: ListView(
                 scrollDirection: Axis.horizontal,
                 children: [
-                  stationCard("ChargePoint - Downtown", "0.5 mi, 3 slots",
-                      "https://via.placeholder.com/150"),
-                  stationCard("EVgo - City Center", "1.2 mi, 2 slots",
-                      "https://via.placeholder.com/150"),
-                  stationCard("Electra Mall", "2.1 mi, 4 slots",
-                      "https://via.placeholder.com/150"),
+                  stationCard(
+                    "ChargePoint - Downtown",
+                    "0.5 mi, 3 slots",
+                    "https://via.placeholder.com/150",
+                  ),
+                  stationCard(
+                    "EVgo - City Center",
+                    "1.2 mi, 2 slots",
+                    "https://via.placeholder.com/150",
+                  ),
+                  stationCard(
+                    "Electra Mall",
+                    "2.1 mi, 4 slots",
+                    "https://via.placeholder.com/150",
+                  ),
                 ],
               ),
             ),
@@ -113,8 +136,10 @@ class EVUserDashboard extends StatelessWidget {
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(25),
                   ),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 24,
+                    vertical: 14,
+                  ),
                 ),
                 onPressed: () {},
                 child: const Text(
@@ -148,19 +173,37 @@ class EVUserDashboard extends StatelessWidget {
           ],
         ),
       ),
-
-      // Bottom Navigation
       bottomNavigationBar: BottomNavigationBar(
-        currentIndex: 0,
+        currentIndex: _selectedIndex,
+        onTap: _onItemTapped,
         selectedItemColor: Colors.black,
         unselectedItemColor: Colors.blueGrey,
         type: BottomNavigationBarType.fixed,
-        items: const [
-          BottomNavigationBarItem(icon: Icon(Icons.home), label: "Home"),
-          BottomNavigationBarItem(icon: Icon(Icons.map), label: "Map"),
+        items: [
           BottomNavigationBarItem(
-              icon: Icon(Icons.history), label: "History"),
-          BottomNavigationBarItem(icon: Icon(Icons.person), label: "Profile"),
+            icon: _selectedIndex == 0
+                ? const Icon(Icons.home)
+                : const Icon(Icons.home_outlined),
+            label: "Home",
+          ),
+          BottomNavigationBarItem(
+            icon: _selectedIndex == 1
+                ? const Icon(Icons.map)
+                : const Icon(Icons.map_outlined),
+            label: "Map",
+          ),
+          BottomNavigationBarItem(
+            icon: _selectedIndex == 2
+                ? const Icon(Icons.history)
+                : const Icon(Icons.history_outlined),
+            label: "History",
+          ),
+          BottomNavigationBarItem(
+            icon: _selectedIndex == 3
+                ? const Icon(Icons.person)
+                : const Icon(Icons.person_outline),
+            label: "Profile",
+          ),
         ],
       ),
     );

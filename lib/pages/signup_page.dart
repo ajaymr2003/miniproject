@@ -82,9 +82,12 @@ class _SignUpPageState extends State<SignUpPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.white, // ✅ White background
       appBar: AppBar(
         title: Text('Sign Up - ${widget.role}'),
-        backgroundColor: Theme.of(context).colorScheme.primary,
+        backgroundColor: Colors.white, // White app bar
+        foregroundColor: Colors.black, // Black text/icons
+        elevation: 0, // No shadow for clean look
       ),
       body: Stack(
         children: [
@@ -98,10 +101,13 @@ class _SignUpPageState extends State<SignUpPage> {
                     alignment: Alignment.centerLeft,
                     child: Text(
                       'Hi - ${widget.role}',
-                      style: Theme.of(context).textTheme.headlineSmall,
+                      style: Theme.of(context)
+                          .textTheme
+                          .headlineSmall
+                          ?.copyWith(color: Colors.black),
                     ),
                   ),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 2),
                   _buildTextField(_fullNameController, 'Full Name',
                       validator: (v) =>
                           v!.isEmpty ? 'Full name is required' : null),
@@ -144,7 +150,12 @@ class _SignUpPageState extends State<SignUpPage> {
                     height: 50,
                     child: ElevatedButton(
                       onPressed: _isLoading ? null : _signUp,
-                      child: const Text('Sign Up', style: TextStyle(fontSize: 18)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF2B2B2B),
+                        foregroundColor: Colors.white,
+                      ),
+                      child: const Text('Sign Up',
+                          style: TextStyle(fontSize: 18)),
                     ),
                   ),
                 ],
@@ -173,6 +184,8 @@ class _SignUpPageState extends State<SignUpPage> {
         decoration: InputDecoration(
           labelText: label,
           border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+          filled: true,
+          fillColor: const Color(0xFFF9F9F9), // Light grey fill for contrast
         ),
         obscureText: obscure,
         keyboardType: keyboard,
