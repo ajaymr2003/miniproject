@@ -52,7 +52,7 @@ class DefaultFirebaseOptions {
     messagingSenderId: '228103071479',
     projectId: 'miniproject-c03ff',
     authDomain: 'miniproject-c03ff.firebaseapp.com',
-    storageBucket: 'miniproject-c03ff.firebasestorage.app',
+    storageBucket: 'miniproject-c03ff.appspot.com',
     measurementId: 'G-CYC0EZYP4V',
   );
 
@@ -61,7 +61,7 @@ class DefaultFirebaseOptions {
     appId: '1:228103071479:android:bf29d92829c2e6706415f2',
     messagingSenderId: '228103071479',
     projectId: 'miniproject-c03ff',
-    storageBucket: 'miniproject-c03ff.firebasestorage.app',
+    storageBucket: 'miniproject-c03ff.appspot.com',
   );
 
   static const FirebaseOptions ios = FirebaseOptions(
@@ -69,7 +69,7 @@ class DefaultFirebaseOptions {
     appId: '1:228103071479:ios:2f41f721a963656a6415f2',
     messagingSenderId: '228103071479',
     projectId: 'miniproject-c03ff',
-    storageBucket: 'miniproject-c03ff.firebasestorage.app',
+    storageBucket: 'miniproject-c03ff.appspot.com',
     iosBundleId: 'com.example.miniproject',
   );
 }
