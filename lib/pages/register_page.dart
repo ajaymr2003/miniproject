@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'login_page.dart'; // Import your LoginPage
 
 class RegisterPage extends StatefulWidget {
@@ -73,13 +74,19 @@ class _RegisterPageState extends State<RegisterPage> {
             return;
           }
 
-          await FirebaseFirestore.instance.collection('users').add({
-            'fullName': fullName, // Store full name
+          // Create document with email as document ID
+          await FirebaseFirestore.instance.collection('users').doc(email).set({
+            'fullName': fullName,
             'email': email,
             'password': password, // ⚠️ Not secure for real apps!
             'role': _selectedRole,
             'createdAt': FieldValue.serverTimestamp(),
           });
+
+          // Save lastRole to SharedPreferences
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString('lastRole', _selectedRole);
+          await prefs.setString('email', email); // <-- Save email
 
           await showDialog(
             context: context,

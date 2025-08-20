@@ -22,11 +22,18 @@ class AppRoutes {
       case login:
         return MaterialPageRoute(builder: (_) => const LoginPage());
       case evuserDashboard:
-        final role =
-            (settings.arguments is String && settings.arguments != null)
-            ? settings.arguments as String
-            : 'EV User';
-        return MaterialPageRoute(builder: (_) => EVUserDashboard(role: role));
+        final args = settings.arguments;
+        String role = 'EV User';
+        String email = '';
+        if (args is Map<String, dynamic>) {
+          role = args['role'] ?? 'EV User';
+          email = args['email'] ?? '';
+        } else if (args is String) {
+          role = args;
+        }
+        return MaterialPageRoute(
+          builder: (_) => EVUserDashboard(role: role, email: email),
+        );
       case adminDashboard:
         final role =
             (settings.arguments is String && settings.arguments != null)
@@ -48,4 +55,3 @@ class AppRoutes {
     }
   }
 }
-  

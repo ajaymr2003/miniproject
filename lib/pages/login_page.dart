@@ -24,39 +24,51 @@ class _LoginPageState extends State<LoginPage> {
         _error = '';
       });
       try {
-        final query = await FirebaseFirestore.instance
+        final email = _emailController.text.trim();
+        final password = _passwordController.text.trim();
+
+        // Fetch user document by email (document ID)
+        final doc = await FirebaseFirestore.instance
             .collection('users')
-            .where('email', isEqualTo: _emailController.text.trim())
-            .where('password', isEqualTo: _passwordController.text)
+            .doc(email)
             .get();
 
-        if (query.docs.isEmpty) {
+        if (!doc.exists) {
           setState(() {
-            _error = 'Invalid email or password.';
+            _error = 'No account found for this email';
           });
-        } else {
-          final role = query.docs.first.data()['role'] ?? '';
-          // Save role to SharedPreferences
-          final prefs = await SharedPreferences.getInstance();
-          await prefs.setString('lastRole', role);
+          return;
+        }
 
-          if (role == 'EV User') {
-            Navigator.pushReplacementNamed(
-              context,
-              AppRoutes.evuserDashboard,
-              arguments: role,
-            );
-          } else if (role == 'Station Owner' || role == 'admin') {
-            Navigator.pushReplacementNamed(
-              context,
-              AppRoutes.adminDashboard,
-              arguments: role,
-            );
-          } else {
-            setState(() {
-              _error = 'Unknown role. Please contact support.';
-            });
-          }
+        final data = doc.data();
+        if (data == null || data['password'] != password) {
+          setState(() {
+            _error = 'Incorrect password';
+          });
+          return;
+        }
+
+        // Optionally save lastRole to SharedPreferences
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('lastRole', data['role'] ?? '');
+        await prefs.setString('email', email); // <-- Save email
+
+        if (data['role'] == 'EV User') {
+          Navigator.pushReplacementNamed(
+            context,
+            AppRoutes.evuserDashboard,
+            arguments: {'role': data['role'], 'email': email},
+          );
+        } else if (data['role'] == 'Station Owner' || data['role'] == 'admin') {
+          Navigator.pushReplacementNamed(
+            context,
+            AppRoutes.adminDashboard,
+            arguments: data['role'],
+          );
+        } else {
+          setState(() {
+            _error = 'Unknown role. Please contact support.';
+          });
         }
       } on FirebaseException catch (e) {
         setState(() {
