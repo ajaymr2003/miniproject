@@ -205,8 +205,8 @@ class StationOwnerDetailsPage extends StatelessWidget {
         },
         backgroundColor: Colors.deepPurple,
         foregroundColor: Colors.white,
-        child: const Icon(Icons.add),
         tooltip: 'Add New Station Owner',
+        child: const Icon(Icons.add),
       ),
     );
   }

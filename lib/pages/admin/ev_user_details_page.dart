@@ -233,8 +233,8 @@ class EvUserDetailsPage extends StatelessWidget {
         },
         backgroundColor: Colors.greenAccent,
         foregroundColor: Colors.white,
-        child: const Icon(Icons.add),
         tooltip: 'Add New EV User',
+        child: const Icon(Icons.add),
       ),
     );
   }

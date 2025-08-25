@@ -11,7 +11,13 @@ final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 Future<void> main() async {
   // Ensure everything is initialized before running the app
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+
+  // Check if Firebase is already initialized
+  if (Firebase.apps.isEmpty) {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+  }
 
   // <-- ADDED: Initialize notification listeners right after Firebase
   await NotificationService().initNotifications();
@@ -27,27 +33,26 @@ Future<void> main() async {
   if (lastRole == 'EV User' && email != null) {
     initialRoute = AppRoutes.evuserDashboard;
     routeArguments = {'role': lastRole!, 'email': email};
-  } else if ((lastRole == 'Station Owner' || lastRole == 'admin') && email != null) {
+  } else if ((lastRole == 'Station Owner' || lastRole == 'admin') &&
+      email != null) {
     initialRoute = AppRoutes.adminDashboard;
     // Admin dashboard might just need the role
-    routeArguments = {'role': lastRole!}; 
+    routeArguments = {'role': lastRole!};
   }
 
-  runApp(MyApp(
-    initialRoute: initialRoute,
-    routeArguments: routeArguments.isNotEmpty ? routeArguments : null,
-  ));
+  runApp(
+    MyApp(
+      initialRoute: initialRoute,
+      routeArguments: routeArguments.isNotEmpty ? routeArguments : null,
+    ),
+  );
 }
 
 class MyApp extends StatelessWidget {
   final String initialRoute;
   final Map<String, String>? routeArguments;
 
-  const MyApp({
-    super.key,
-    required this.initialRoute,
-    this.routeArguments,
-  });
+  const MyApp({super.key, required this.initialRoute, this.routeArguments});
 
   @override
   Widget build(BuildContext context) {

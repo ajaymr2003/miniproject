@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+// --- 1. IMPORT REALTIME DATABASE PACKAGE ---
+import 'package:firebase_database/firebase_database.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class EVUserSetup extends StatefulWidget {
-  final String email; // <-- rename for clarity
+  final String email;
   const EVUserSetup({super.key, required this.email});
 
   @override
@@ -27,11 +29,15 @@ class _EVUserSetupState extends State<EVUserSetup> {
     _fetchBrands();
   }
 
+  // --- 2. ADD HELPER FUNCTION (for consistency) ---
+  String _encodeEmailForRtdb(String email) {
+    return email.replaceAll('.', ',');
+  }
+
   Future<void> _fetchBrands() async {
     try {
-      final snapshot = await FirebaseFirestore.instance
-          .collection('vehicle_models')
-          .get();
+      final snapshot =
+          await FirebaseFirestore.instance.collection('vehicle_models').get();
       if (!mounted) return;
       setState(() {
         brands = snapshot.docs.map((doc) => doc.id).toList();
@@ -74,14 +80,16 @@ class _EVUserSetupState extends State<EVUserSetup> {
     }
   }
 
+  // =========================================================================
+  // --- 3. MODIFIED FUNCTION: Write to both Firestore and RTDB ---
+  // =========================================================================
   Future<void> _completeSetup() async {
-    // Ensure document ID is not empty
     String email = widget.email;
     if (email.isEmpty) {
       final prefs = await SharedPreferences.getInstance();
       email = prefs.getString('email') ?? '';
     }
-    print('EVUserSetup: document ID (email) = "$email"');
+    
     if (email.isEmpty) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -91,12 +99,25 @@ class _EVUserSetupState extends State<EVUserSetup> {
       return;
     }
     try {
+      // --- Write to Firestore (permanent user profile) ---
+      // This part remains the same.
       await FirebaseFirestore.instance.collection('users').doc(email).set({
         'brand': selectedBrand,
         'variant': selectedVariant,
         'setupComplete': true,
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
+
+      // --- Write to Realtime Database (initializes the live data node) ---
+      final rtdbRef = FirebaseDatabase.instance
+          .ref('vehicles/${_encodeEmailForRtdb(email)}');
+      await rtdbRef.set({
+        'email': email,
+        'brand': selectedBrand,
+        'variant': selectedVariant,
+        'isRunning': false, // Default "at rest" state
+        'batteryLevel': 100,  // Default "at rest" state
+      });
 
       if (mounted) {
         Navigator.of(context).pop(true); // return success
@@ -126,7 +147,6 @@ class _EVUserSetupState extends State<EVUserSetup> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Header
           Row(
             children: [
               if (_step > 0)
@@ -149,22 +169,17 @@ class _EVUserSetupState extends State<EVUserSetup> {
             ],
           ),
           const SizedBox(height: 8),
-
-          // Body
           Expanded(
             child: AnimatedSwitcher(
               duration: const Duration(milliseconds: 300),
               child: _step == 0 ? _buildBrandStep() : _buildVariantStep(),
             ),
           ),
-
-          // Action
           const SizedBox(height: 8),
           SizedBox(
             width: double.infinity,
             child: ElevatedButton(
-              onPressed:
-                  (_step == 0 && selectedBrand != null) ||
+              onPressed: (_step == 0 && selectedBrand != null) ||
                       (_step == 1 && selectedVariant != null)
                   ? _nextStep
                   : null,
