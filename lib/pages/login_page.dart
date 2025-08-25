@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_messaging/firebase_messaging.dart'; // <-- 1. IMPORT PACKAGE
 import '../routes/app_routes.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -17,6 +18,9 @@ class _LoginPageState extends State<LoginPage> {
   bool _loading = false;
   String _error = '';
 
+  // =================================================================
+  // --- MODIFIED LOGIN FUNCTION ---
+  // =================================================================
   Future<void> _login() async {
     if (_formKey.currentState!.validate()) {
       setState(() {
@@ -48,10 +52,36 @@ class _LoginPageState extends State<LoginPage> {
           return;
         }
 
-        // Optionally save lastRole to SharedPreferences
+        // =====================================================================
+        // <-- 2. GET AND SAVE FCM TOKEN AFTER SUCCESSFUL LOGIN -->
+        // =====================================================================
+        try {
+          // Request permission for notifications (important for iOS and web)
+          await FirebaseMessaging.instance.requestPermission();
+          
+          // Get the unique device token
+          String? fcmToken = await FirebaseMessaging.instance.getToken();
+
+          if (fcmToken != null) {
+            // Update the user's document with the new token
+            await doc.reference.update({'fcmToken': fcmToken});
+            print('FCM Token successfully updated for user: $email');
+          } else {
+            print('Could not get FCM token. Skipping update.');
+          }
+        } catch (e) {
+          // It's better not to block login if only the token update fails.
+          // Just log the error for debugging.
+          print('Error updating FCM token: $e');
+        }
+        // =====================================================================
+        // <-- END OF NEW LOGIC -->
+        // =====================================================================
+
+        // Save session info and navigate
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('lastRole', data['role'] ?? '');
-        await prefs.setString('email', email); // <-- Save email
+        await prefs.setString('email', email);
 
         if (data['role'] == 'EV User') {
           Navigator.pushReplacementNamed(
@@ -79,15 +109,18 @@ class _LoginPageState extends State<LoginPage> {
           _error = 'Login failed: ${e.toString()}';
         });
       } finally {
-        setState(() {
-          _loading = false;
-        });
+        if (mounted) { // Check if the widget is still in the tree
+          setState(() {
+            _loading = false;
+          });
+        }
       }
     }
   }
+  // --- END OF MODIFIED LOGIN FUNCTION ---
+
 
   void _forgotPassword() {
-    // Navigate to a new page for password reset or show a dialog
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         content: Text('Forgot password functionality not implemented.'),

@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
 import '../../routes/app_routes.dart';
 import 'ev_user_details_page.dart';
+import 'station_owner_details_page.dart'; // <-- Add this import
 
 class AdminDashboard extends StatefulWidget {
   final String role;
@@ -18,14 +19,17 @@ class AdminDashboard extends StatefulWidget {
 class _AdminDashboardState extends State<AdminDashboard> {
   int _selectedIndex = 0;
   int _evUsers = 0;
+  int _totalStations = 0; // <-- Add this line
   Timer? _timer;
 
   @override
   void initState() {
     super.initState();
     _fetchEVUserCount();
+    _fetchTotalStations(); // <-- Add this line
     _timer = Timer.periodic(const Duration(seconds: 3), (timer) {
       _fetchEVUserCount();
+      _fetchTotalStations(); // <-- Add this line
     });
   }
 
@@ -33,6 +37,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
   void didChangeDependencies() {
     super.didChangeDependencies();
     _fetchEVUserCount();
+    _fetchTotalStations(); // <-- Add this line
   }
 
   @override
@@ -59,6 +64,32 @@ class _AdminDashboardState extends State<AdminDashboard> {
           _evUsers = 0;
         });
       }
+    }
+  }
+
+  Future<void> _fetchTotalStations() async {
+    try {
+      // Documents are keyed by email, but we filter by 'role' field
+      final stationOwnersSnap = await FirebaseFirestore.instance
+          .collection('users')
+          .where('role', isEqualTo: 'Station Owner')
+          .get();
+
+      // Debug: print the number of docs and their emails
+      print('Station Owner docs count: ${stationOwnersSnap.size}');
+      for (var doc in stationOwnersSnap.docs) {
+        print('Station Owner email: ${doc['email']}');
+      }
+
+      final newCount = stationOwnersSnap.size;
+      setState(() {
+        _totalStations = newCount;
+      });
+    } catch (e) {
+      print('Error fetching Station Owners: $e');
+      setState(() {
+        _totalStations = 0;
+      });
     }
   }
 
@@ -198,7 +229,9 @@ class _AdminDashboardState extends State<AdminDashboard> {
                 ),
                 _buildSummaryCard(
                   'Total Stations',
-                  '10', // sample constant
+                  _totalStations == -1
+                      ? '...'
+                      : _totalStations.toString(), // <-- Changed here
                 ),
                 _buildSummaryCard(
                   'Station Requests',
@@ -221,8 +254,11 @@ class _AdminDashboardState extends State<AdminDashboard> {
             ),
             const SizedBox(height: 16),
             _buildActionButton('Manage Stations', () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Manage all stations')),
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const StationOwnerDetailsPage(),
+                ),
               );
             }),
             _buildActionButton('View Reports', () {
@@ -266,3 +302,6 @@ class _AdminDashboardState extends State<AdminDashboard> {
     );
   }
 }
+
+// No changes needed in Dart code for counting logic.
+// Make sure your Firestore rules allow read access to the 'users' collection.
