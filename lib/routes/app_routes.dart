@@ -5,11 +5,13 @@ import '../pages/login_page.dart';
 import '../pages/evuser/evuser_dashboard.dart';
 import '../pages/admin/admin_dashboard.dart';
 import '../pages/station_owner/station_owner_dashboard.dart';
+import '../pages/forgot_password_page.dart'; // <-- 1. IMPORT THE NEW PAGE
 
 class AppRoutes {
   static const String landing = '/';
   static const String register = '/register';
   static const String login = '/login';
+  static const String forgotPassword = '/forgot_password'; // <-- 2. DEFINE THE ROUTE NAME
   static const String evuserDashboard = '/evuser_dashboard';
   static const String adminDashboard = '/admin_dashboard';
 
@@ -21,6 +23,12 @@ class AppRoutes {
         return MaterialPageRoute(builder: (_) => const RegisterPage());
       case login:
         return MaterialPageRoute(builder: (_) => const LoginPage());
+        
+      // --- 3. ADD THE CASE FOR THE NEW ROUTE ---
+      case forgotPassword:
+        return MaterialPageRoute(builder: (_) => const ForgotPasswordPage());
+      // -----------------------------------------
+
       case evuserDashboard:
         final args = settings.arguments;
         String role = 'EV User';

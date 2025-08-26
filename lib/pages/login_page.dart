@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_messaging/firebase_messaging.dart'; // <-- 1. IMPORT PACKAGE
+import 'package:firebase_auth/firebase_auth.dart'; // Import Firebase Auth
+import 'package:firebase_messaging/firebase_messaging.dart';
 import '../routes/app_routes.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -18,9 +19,6 @@ class _LoginPageState extends State<LoginPage> {
   bool _loading = false;
   String _error = '';
 
-  // =================================================================
-  // --- MODIFIED LOGIN FUNCTION ---
-  // =================================================================
   Future<void> _login() async {
     if (_formKey.currentState!.validate()) {
       setState(() {
@@ -31,7 +29,13 @@ class _LoginPageState extends State<LoginPage> {
         final email = _emailController.text.trim();
         final password = _passwordController.text.trim();
 
-        // Fetch user document by email (document ID)
+        // Step 1: Sign in with Firebase Authentication (secure method)
+        await FirebaseAuth.instance.signInWithEmailAndPassword(
+          email: email,
+          password: password,
+        );
+
+        // Step 2: If sign-in is successful, fetch the user's role from Firestore
         final doc = await FirebaseFirestore.instance
             .collection('users')
             .doc(email)
@@ -39,46 +43,26 @@ class _LoginPageState extends State<LoginPage> {
 
         if (!doc.exists) {
           setState(() {
-            _error = 'No account found for this email';
+            _error = 'User profile not found. Please contact support.';
           });
           return;
         }
 
-        final data = doc.data();
-        if (data == null || data['password'] != password) {
-          setState(() {
-            _error = 'Incorrect password';
-          });
-          return;
-        }
+        final data = doc.data()!;
 
-        // =====================================================================
-        // <-- 2. GET AND SAVE FCM TOKEN AFTER SUCCESSFUL LOGIN -->
-        // =====================================================================
+        // Step 3: Get and save FCM token
         try {
-          // Request permission for notifications (important for iOS and web)
           await FirebaseMessaging.instance.requestPermission();
-          
-          // Get the unique device token
           String? fcmToken = await FirebaseMessaging.instance.getToken();
-
           if (fcmToken != null) {
-            // Update the user's document with the new token
             await doc.reference.update({'fcmToken': fcmToken});
             print('FCM Token successfully updated for user: $email');
-          } else {
-            print('Could not get FCM token. Skipping update.');
           }
         } catch (e) {
-          // It's better not to block login if only the token update fails.
-          // Just log the error for debugging.
           print('Error updating FCM token: $e');
         }
-        // =====================================================================
-        // <-- END OF NEW LOGIC -->
-        // =====================================================================
 
-        // Save session info and navigate
+        // Step 4: Save session info and navigate based on role
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('lastRole', data['role'] ?? '');
         await prefs.setString('email', email);
@@ -100,32 +84,34 @@ class _LoginPageState extends State<LoginPage> {
             _error = 'Unknown role. Please contact support.';
           });
         }
-      } on FirebaseException catch (e) {
-        setState(() {
+      } on FirebaseAuthException catch (e) {
+        // Handle specific Firebase Auth errors
+        if (e.code == 'user-not-found' || e.code == 'invalid-email') {
+          _error = 'No account found for this email.';
+        } else if (e.code == 'wrong-password' || e.code == 'invalid-credential') {
+          _error = 'Incorrect password.';
+        } else {
           _error = 'Login failed: ${e.message}';
-        });
+        }
       } catch (e) {
-        setState(() {
-          _error = 'Login failed: ${e.toString()}';
-        });
+        _error = 'An unexpected error occurred: ${e.toString()}';
       } finally {
-        if (mounted) { // Check if the widget is still in the tree
+        if (mounted) {
           setState(() {
             _loading = false;
+            if (_error.isNotEmpty) {
+              // Clear password field on error for better UX
+              _passwordController.clear();
+            }
           });
         }
       }
     }
   }
-  // --- END OF MODIFIED LOGIN FUNCTION ---
-
 
   void _forgotPassword() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Forgot password functionality not implemented.'),
-      ),
-    );
+    // Navigate to the new forgot password page
+    Navigator.pushNamed(context, AppRoutes.forgotPassword);
   }
 
   void _goToSignUp() {

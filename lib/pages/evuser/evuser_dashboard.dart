@@ -5,7 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'evuser_profile.dart';
 import 'ev_user_setup.dart';
 
-/// HomePage is the main view for the 'Home' tab, redesigned to match the UI.
+// HomePage remains the same
 class HomePage extends StatefulWidget {
   final String email;
   const HomePage({super.key, required this.email});
@@ -15,7 +15,6 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  // Helper to encode email for RTDB path
   String _encodeEmailForRtdb(String email) {
     return email.replaceAll('.', ',');
   }
@@ -25,16 +24,13 @@ class _HomePageState extends State<HomePage> {
     final vehicleRtdbRef = FirebaseDatabase.instance
         .ref('vehicles/${_encodeEmailForRtdb(widget.email)}');
 
-    // The main UI is built using a StreamBuilder to get live data
     return StreamBuilder<DatabaseEvent>(
       stream: vehicleRtdbRef.onValue,
       builder: (context, snapshot) {
-        // Provide default values for a clean initial render
         int batteryLevel = 78;
         String locationName = 'JP Nagar, Bengaluru';
         bool isRunning = false;
 
-        // Once data arrives from Firebase, update the variables
         if (snapshot.hasData && snapshot.data?.snapshot.value != null) {
           final data =
               Map<String, dynamic>.from(snapshot.data!.snapshot.value as Map);
@@ -43,7 +39,6 @@ class _HomePageState extends State<HomePage> {
           isRunning = data['isRunning'] ?? false;
         }
 
-        // The main scrollable layout
         return SingleChildScrollView(
           padding: const EdgeInsets.all(16.0),
           child: Column(
@@ -92,7 +87,6 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // Helper widget for section titles
   Widget _buildSectionTitle(String title) {
     return Text(
       title,
@@ -100,7 +94,6 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // Widget for the Battery Status section
   Widget _buildBatteryStatus(int batteryLevel, String locationName) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -122,7 +115,6 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // Widget for the "Enable Live Tracking" card
   Widget _buildLiveTrackingCard(bool isRunning) {
     return Container(
       padding: const EdgeInsets.all(16),
@@ -156,7 +148,6 @@ class _HomePageState extends State<HomePage> {
                   style: TextStyle(color: Colors.grey[600]),
                 ),
                 const SizedBox(height: 16),
-                // Only show the "Enable" button if simulation is not running
                 if (!isRunning)
                   ElevatedButton(
                     onPressed: () {
@@ -180,8 +171,6 @@ class _HomePageState extends State<HomePage> {
             ),
           ),
           const SizedBox(width: 16),
-          // NOTE: If you have a car image, place it in an 'assets' folder
-          // and replace this Icon with: Image.asset('assets/car.png', height: 60)
           Icon(Icons.electric_car,
               size: 80, color: Colors.blueAccent.withOpacity(0.7)),
         ],
@@ -189,7 +178,6 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // Widget for Nearby Stations (Placeholder)
   Widget _buildNearbyStations() {
     return SizedBox(
       height: 150,
@@ -208,7 +196,6 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // Helper for a single station card
   Widget _buildStationCard(String name, String details, Color color) {
     return GestureDetector(
       onTap: () => ScaffoldMessenger.of(context)
@@ -244,7 +231,6 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // Widget for Charging History (Placeholder)
   Widget _buildChargingHistory() {
     return Container(
       padding: const EdgeInsets.all(16),
@@ -277,7 +263,6 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // Helper for a single history bar
   Widget _buildHistoryBar(String day, double heightFraction) {
     return Column(
       children: [
@@ -307,7 +292,7 @@ class _HomePageState extends State<HomePage> {
   }
 }
 
-// MapPage placeholder
+// MapPage and HistoryPage placeholders remain the same
 class MapPage extends StatelessWidget {
   const MapPage({super.key});
   @override
@@ -318,7 +303,6 @@ class MapPage extends StatelessWidget {
   }
 }
 
-// HistoryPage placeholder
 class HistoryPage extends StatelessWidget {
   const HistoryPage({super.key});
   @override
@@ -329,7 +313,11 @@ class HistoryPage extends StatelessWidget {
   }
 }
 
-/// EVUserDashboard is the main Scaffold that holds the BottomNavigationBar.
+
+// =========================================================================
+// --- MODIFIED: The main dashboard state logic is refactored ---
+// =========================================================================
+
 class EVUserDashboard extends StatefulWidget {
   final String role;
   final String email;
@@ -341,76 +329,104 @@ class EVUserDashboard extends StatefulWidget {
 
 class _EVUserDashboardState extends State<EVUserDashboard> {
   int _selectedIndex = 0;
-  bool _setupDialogOpen = false;
   String? _email;
+  bool _isLoading = true; // Added loading state for better UX
+  bool _setupDialogOpen = false;
 
   List<Widget> get _pages => [
-        HomePage(email: _email ?? widget.email),
+        // Pass the guaranteed non-null email to HomePage
+        HomePage(email: _email!),
         const MapPage(),
         const HistoryPage(),
-        const EVUserProfile(), // Navigate to profile directly
+        const EVUserProfile(),
       ];
 
   @override
   void initState() {
     super.initState();
-    _initEmailAndCheckProfile();
+    // This is the single entry point for our check.
+    _initializeAndCheckProfile();
   }
-
-  Future<void> _initEmailAndCheckProfile() async {
+  
+  // This new function handles the entire sequence: get email, check profile.
+  Future<void> _initializeAndCheckProfile() async {
+    // 1. Determine the correct email to use
     String emailToUse = widget.email;
     if (emailToUse.isEmpty) {
       final prefs = await SharedPreferences.getInstance();
       emailToUse = prefs.getString('email') ?? '';
     }
-    if (mounted) {
+
+    // 2. If no email can be found, stop loading and show an error state
+    if (emailToUse.isEmpty) {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _email = null; // Ensure email is null to show error
+        });
+      }
+      return;
+    }
+    
+    // 3. Set the email for the widget state
+    if(mounted) {
       setState(() {
         _email = emailToUse;
       });
-      _checkProfileCompletion();
     }
-  }
 
-  Future<void> _checkProfileCompletion() async {
-    final emailToUse = _email;
-    if (emailToUse == null || emailToUse.isEmpty) return;
-
+    // 4. Check if the user's vehicle setup is complete in Firestore
     try {
       final doc = await FirebaseFirestore.instance
           .collection('users')
           .doc(emailToUse)
           .get();
+
       final data = doc.data();
-      if (data == null ||
-          data['brand'] == null ||
-          (data['brand'] as String).isEmpty) {
-        // Use a post-frame callback to safely show the dialog after the build.
+      // If the document doesn't exist, or 'brand' is missing, user needs setup.
+      if (!doc.exists || data == null || data['brand'] == null || (data['brand'] as String).isEmpty) {
+        // Use a post-frame callback to safely show the dialog AFTER the first frame is built.
+        // This prevents errors related to showing dialogs during a build phase.
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted) _showProfileSetupDialog();
         });
       }
     } catch (e) {
-      // Handle error if necessary
+      print("Error checking profile completion: $e");
+      // Optionally show a SnackBar to the user
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Error checking profile: ${e.toString()}")),
+        );
+      }
+    }
+    
+    // 5. Once all checks are done, stop loading and build the main UI
+    if(mounted) {
+      setState(() {
+        _isLoading = false;
+      });
     }
   }
 
+  // This function is now only responsible for showing the dialog
   Future<void> _showProfileSetupDialog() async {
     if (_setupDialogOpen || !mounted) return;
     _setupDialogOpen = true;
 
-    await showDialog<bool>(
+    await showDialog<void>(
       context: context,
-      barrierDismissible: false,
+      barrierDismissible: false, // User MUST complete the setup
       builder: (context) => Dialog(
-        insetPadding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+        insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 420, maxHeight: 520),
-          child: EVUserSetup(email: _email ?? widget.email),
+          child: EVUserSetup(email: _email!),
         ),
       ),
     );
+    
     _setupDialogOpen = false;
   }
 
@@ -421,12 +437,10 @@ class _EVUserDashboardState extends State<EVUserDashboard> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF8F9FA), // Light grey background
+      backgroundColor: const Color(0xFFF8F9FA),
       appBar: AppBar(
         automaticallyImplyLeading: false,
-        title: const Text('EV Smart Charge',
-            style:
-                TextStyle(fontWeight: FontWeight.bold, color: Colors.black)),
+        title: const Text('EV Smart Charge', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.black)),
         actions: [
           IconButton(
             onPressed: () {
@@ -437,23 +451,25 @@ class _EVUserDashboardState extends State<EVUserDashboard> {
             icon: const Icon(Icons.notifications_none, color: Colors.black),
           ),
         ],
-        backgroundColor:
-            const Color(0xFFF8F9FA), // Match body background color
+        backgroundColor: const Color(0xFFF8F9FA),
         elevation: 0,
       ),
-      body: (_email ?? widget.email).isEmpty
-          ? const Center(child: Text("Loading user..."))
-          : IndexedStack( // Use IndexedStack to keep page state
-              index: _selectedIndex,
-              children: _pages,
-            ),
+      // Use the loading state to provide clear user feedback
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : _email == null
+              ? const Center(child: Text("Could not load user data. Please log in again."))
+              : IndexedStack(
+                  index: _selectedIndex,
+                  children: _pages,
+                ),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _selectedIndex,
         onTap: _onItemTapped,
-        selectedItemColor: Colors.black, // Active icon color
+        selectedItemColor: Colors.black,
         unselectedItemColor: Colors.grey.shade600,
         backgroundColor: Colors.white,
-        type: BottomNavigationBarType.fixed, // Important for more than 3 items
+        type: BottomNavigationBarType.fixed,
         showUnselectedLabels: true,
         items: const [
           BottomNavigationBarItem(icon: Icon(Icons.home), label: 'Home'),

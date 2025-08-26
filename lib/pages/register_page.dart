@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:firebase_auth/firebase_auth.dart'; // <-- 1. IMPORT FIREBASE AUTH
 import 'login_page.dart'; // Import your LoginPage
 
 class RegisterPage extends StatefulWidget {
@@ -12,8 +12,7 @@ class RegisterPage extends StatefulWidget {
 
 class _RegisterPageState extends State<RegisterPage> {
   final _formKey = GlobalKey<FormState>();
-  final _fullNameController =
-      TextEditingController(); // Add full name controller
+  final _fullNameController = TextEditingController();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   String _selectedRole = 'EV User';
@@ -48,62 +47,62 @@ class _RegisterPageState extends State<RegisterPage> {
     );
   }
 
+  // =========================================================================
+  // --- 2. MODIFIED: The _register function now uses Firebase Auth ---
+  // =========================================================================
   Future<void> _register() async {
     if (_formKey.currentState!.validate()) {
       final confirmed = await _showConfirmationDialog(context);
-      if (confirmed == true) {
-        setState(() {
-          _loading = true;
-          _error = '';
+      if (confirmed != true) return; // Exit if user cancels
+
+      setState(() {
+        _loading = true;
+        _error = '';
+      });
+
+      try {
+        final fullName = _fullNameController.text.trim();
+        final email = _emailController.text.trim();
+        final password = _passwordController.text.trim();
+
+        // Step 1: Create the user in Firebase Authentication
+        // This is the primary, secure way to create a user.
+        // It will fail if the email is already in use by the Auth service.
+        await FirebaseAuth.instance.createUserWithEmailAndPassword(
+          email: email,
+          password: password,
+        );
+
+        // Step 2: Create the user's profile document in Firestore.
+        // We use the same email as the document ID for consistency.
+        await FirebaseFirestore.instance.collection('users').doc(email).set({
+          'fullName': fullName,
+          'email': email,
+          // ⚠️ SECURITY NOTE: Storing the password here is redundant and insecure.
+          // Firebase Auth handles password storage securely. We keep it for now
+          // to maintain compatibility with your existing login logic.
+          // In a real app, you would remove this line.
+          'password': password,
+          'role': _selectedRole,
+          'createdAt': FieldValue.serverTimestamp(),
         });
-        try {
-          final fullName = _fullNameController.text.trim(); // Get full name
-          final email = _emailController.text.trim();
-          final password = _passwordController.text.trim();
 
-          final query = await FirebaseFirestore.instance
-              .collection('users')
-              .where('email', isEqualTo: email)
-              .limit(1)
-              .get();
-
-          if (query.docs.isNotEmpty) {
-            setState(() {
-              _error = 'Email already in use';
-            });
-            return;
-          }
-
-          // Create document with email as document ID
-          await FirebaseFirestore.instance.collection('users').doc(email).set({
-            'fullName': fullName,
-            'email': email,
-            'password': password, // ⚠️ Not secure for real apps!
-            'role': _selectedRole,
-            'createdAt': FieldValue.serverTimestamp(),
-          });
-
-          // Save lastRole to SharedPreferences
-          final prefs = await SharedPreferences.getInstance();
-          await prefs.setString('lastRole', _selectedRole);
-          await prefs.setString('email', email); // <-- Save email
-
+        // Registration is successful, show a success message and navigate
+        if (mounted) {
           await showDialog(
             context: context,
             barrierDismissible: false,
             builder: (BuildContext dialogContext) {
               return AlertDialog(
                 title: const Text('Success'),
-                content: const Text('Registration successful!'),
+                content: const Text('Registration successful! Please log in.'),
                 actions: [
                   TextButton(
                     onPressed: () {
                       Navigator.of(dialogContext).pop(); // Close dialog
                       Navigator.pushReplacement(
                         context,
-                        MaterialPageRoute(
-                          builder: (context) => const LoginPage(),
-                        ),
+                        MaterialPageRoute(builder: (context) => const LoginPage()),
                       );
                     },
                     child: const Text('OK'),
@@ -112,15 +111,24 @@ class _RegisterPageState extends State<RegisterPage> {
               );
             },
           );
-        } on FirebaseException catch (e) {
-          setState(() {
-            _error = 'Registration failed: ${e.message}';
-          });
-        } catch (e) {
-          setState(() {
-            _error = 'Registration failed: ${e.toString()}';
-          });
-        } finally {
+        }
+      } on FirebaseAuthException catch (e) {
+        // Handle specific Firebase Authentication errors
+        if (e.code == 'weak-password') {
+          _error = 'The password provided is too weak.';
+        } else if (e.code == 'email-already-in-use') {
+          _error = 'An account already exists for this email.';
+        } else {
+          _error = 'An error occurred: ${e.message}';
+        }
+        setState(() {});
+      } catch (e) {
+        // Handle other errors (like Firestore issues or network problems)
+        setState(() {
+          _error = 'An unexpected error occurred: ${e.toString()}';
+        });
+      } finally {
+        if (mounted) {
           setState(() {
             _loading = false;
           });
@@ -128,7 +136,8 @@ class _RegisterPageState extends State<RegisterPage> {
       }
     }
   }
-
+  
+  // The build method remains exactly the same. No UI changes are needed.
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -157,7 +166,7 @@ class _RegisterPageState extends State<RegisterPage> {
                 ),
                 const SizedBox(height: 40),
                 TextFormField(
-                  controller: _fullNameController, // Full name field
+                  controller: _fullNameController,
                   decoration: InputDecoration(
                     labelText: 'Full Name',
                     hintText: 'Enter your full name',

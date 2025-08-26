@@ -43,12 +43,12 @@ class EvUserDetailsPage extends StatelessWidget {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.error_outline, color: Colors.red, size: 50),
-                  SizedBox(height: 16),
+                  const Icon(Icons.error_outline, color: Colors.red, size: 50),
+                  const SizedBox(height: 16),
                   Text(
                     'Error: ${snapshot.error}',
                     textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 16, color: Colors.red),
+                    style: const TextStyle(fontSize: 16, color: Colors.red),
                   ),
                 ],
               ),
