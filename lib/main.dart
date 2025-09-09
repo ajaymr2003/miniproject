@@ -2,80 +2,72 @@ import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
 import 'routes/app_routes.dart';
-import 'services/notification_service.dart'; // <-- ADDED: Import the service
-import 'package:shared_preferences/shared_preferences.dart';
+import 'services/notification_service.dart';
+import 'services/ai_recommendation_service.dart';
 
-// <-- ADDED: A global key to access the Navigator from anywhere
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 Future<void> main() async {
-  // Ensure everything is initialized before running the app
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Check if Firebase is already initialized
-  if (Firebase.apps.isEmpty) {
-    await Firebase.initializeApp(
-      options: DefaultFirebaseOptions.currentPlatform,
-    );
+  try {
+    // The initializer now just sets up services, it doesn't decide the route.
+    await AppInitializer.initializeApp();
+    runApp(const MyApp());
+  } catch (e, stack) {
+    debugPrint("❌ App failed to initialize: $e\n$stack");
+    runApp(const MaterialApp(
+      home: Scaffold(
+        body: Center(
+          child: Text("App failed to start. Please restart."),
+        ),
+      ),
+    ));
   }
+}
 
-  // <-- ADDED: Initialize notification listeners right after Firebase
-  await NotificationService().initNotifications();
+/// Handles all async startup tasks
+class AppInitializer {
+  static Future<void> initializeApp() async {
+    // --- Firebase ---
+    if (Firebase.apps.isEmpty) {
+      await Firebase.initializeApp(
+        options: DefaultFirebaseOptions.currentPlatform,
+      );
+    }
 
-  // Your existing logic for initial route based on saved session
-  final prefs = await SharedPreferences.getInstance();
-  final lastRole = prefs.getString('lastRole');
-  final email = prefs.getString('email'); // Also get email for arguments
+    // --- Notifications ---
+    await NotificationService().initNotifications();
 
-  String initialRoute = AppRoutes.landing;
-  Map<String, String> routeArguments = {};
+    // --- AI Service ---
+    try {
+      await AiRecommendationService.instance.initialize();
+      debugPrint("✅ AI Service initialized successfully");
+    } catch (e) {
+      debugPrint("⚠️ AI Service initialization failed: $e");
+    }
 
-  if (lastRole == 'EV User' && email != null) {
-    initialRoute = AppRoutes.evuserDashboard;
-    routeArguments = {'role': lastRole!, 'email': email};
-  } else if ((lastRole == 'Station Owner' || lastRole == 'admin') &&
-      email != null) {
-    initialRoute = AppRoutes.adminDashboard;
-    // Admin dashboard might just need the role
-    routeArguments = {'role': lastRole!};
+    // --- The logic for checking SharedPreferences has been moved to the SplashScreen ---
   }
-
-  runApp(
-    MyApp(
-      initialRoute: initialRoute,
-      routeArguments: routeArguments.isNotEmpty ? routeArguments : null,
-    ),
-  );
 }
 
 class MyApp extends StatelessWidget {
-  final String initialRoute;
-  final Map<String, String>? routeArguments;
-
-  const MyApp({super.key, required this.initialRoute, this.routeArguments});
+  const MyApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      navigatorKey: navigatorKey, // <-- ADDED: Assign the global key
+      navigatorKey: navigatorKey,
       debugShowCheckedModeBanner: false,
       title: 'Smart EV',
       theme: ThemeData(
-        primarySwatch: Colors.indigo,
+        colorSchemeSeed: Colors.indigo,
         fontFamily: 'Inter',
         useMaterial3: true,
       ),
-      initialRoute: initialRoute,
-      onGenerateRoute: (settings) {
-        // If the app is starting on a protected route, pass the saved arguments
-        if (settings.name == initialRoute && routeArguments != null) {
-          return AppRoutes.generateRoute(
-            RouteSettings(name: initialRoute, arguments: routeArguments),
-          );
-        }
-        // Otherwise, generate routes as normal
-        return AppRoutes.generateRoute(settings);
-      },
+      // --- CHANGE: Always start at the splash route ---
+      initialRoute: AppRoutes.splash,
+      onGenerateRoute: AppRoutes.generateRoute,
     );
   }
 }

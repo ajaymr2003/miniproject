@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart'; // Import Firebase Auth
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import '../routes/app_routes.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+// --- ADD THIS IMPORT for the platform check ---
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -29,13 +32,11 @@ class _LoginPageState extends State<LoginPage> {
         final email = _emailController.text.trim();
         final password = _passwordController.text.trim();
 
-        // Step 1: Sign in with Firebase Authentication (secure method)
         await FirebaseAuth.instance.signInWithEmailAndPassword(
           email: email,
           password: password,
         );
 
-        // Step 2: If sign-in is successful, fetch the user's role from Firestore
         final doc = await FirebaseFirestore.instance
             .collection('users')
             .doc(email)
@@ -49,20 +50,36 @@ class _LoginPageState extends State<LoginPage> {
         }
 
         final data = doc.data()!;
+        final bool isActive = data['isActive'] ?? true;
 
-        // Step 3: Get and save FCM token
-        try {
-          await FirebaseMessaging.instance.requestPermission();
-          String? fcmToken = await FirebaseMessaging.instance.getToken();
-          if (fcmToken != null) {
-            await doc.reference.update({'fcmToken': fcmToken});
-            print('FCM Token successfully updated for user: $email');
-          }
-        } catch (e) {
-          print('Error updating FCM token: $e');
+        if (!isActive) {
+          await FirebaseAuth.instance.signOut();
+          setState(() {
+            _error = 'Your account has been deactivated. Please contact an administrator.';
+          });
+          return;
         }
 
-        // Step 4: Save session info and navigate based on role
+        // --- START of platform-specific code ---
+        // This block will now only run if the app is NOT running on the web.
+        if (!kIsWeb) {
+          try {
+            await FirebaseMessaging.instance.requestPermission();
+            String? fcmToken = await FirebaseMessaging.instance.getToken();
+            if (fcmToken != null) {
+              await doc.reference.update({'fcmToken': fcmToken});
+              print('FCM Token successfully updated for user: $email');
+            }
+          } catch (e) {
+            // It's good practice to log errors, even if we're moving on.
+            print('Error updating FCM token on mobile: $e');
+          }
+        } else {
+          // Optional: Log that we're skipping this on the web for debugging purposes.
+          print('Skipping FCM token update on web platform.');
+        }
+        // --- END of platform-specific code ---
+
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('lastRole', data['role'] ?? '');
         await prefs.setString('email', email);
@@ -73,7 +90,13 @@ class _LoginPageState extends State<LoginPage> {
             AppRoutes.evuserDashboard,
             arguments: {'role': data['role'], 'email': email},
           );
-        } else if (data['role'] == 'Station Owner' || data['role'] == 'admin') {
+        } else if (data['role'] == 'Station Owner') {
+          Navigator.pushReplacementNamed(
+            context,
+            AppRoutes.stationOwnerDashboard,
+            arguments: {'role': data['role'], 'email': email},
+          );
+        } else if (data['role'] == 'admin') {
           Navigator.pushReplacementNamed(
             context,
             AppRoutes.adminDashboard,
@@ -85,7 +108,6 @@ class _LoginPageState extends State<LoginPage> {
           });
         }
       } on FirebaseAuthException catch (e) {
-        // Handle specific Firebase Auth errors
         if (e.code == 'user-not-found' || e.code == 'invalid-email') {
           _error = 'No account found for this email.';
         } else if (e.code == 'wrong-password' || e.code == 'invalid-credential') {
@@ -100,7 +122,6 @@ class _LoginPageState extends State<LoginPage> {
           setState(() {
             _loading = false;
             if (_error.isNotEmpty) {
-              // Clear password field on error for better UX
               _passwordController.clear();
             }
           });
@@ -110,7 +131,6 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   void _forgotPassword() {
-    // Navigate to the new forgot password page
     Navigator.pushNamed(context, AppRoutes.forgotPassword);
   }
 
@@ -120,6 +140,7 @@ class _LoginPageState extends State<LoginPage> {
 
   @override
   Widget build(BuildContext context) {
+    // --- The build method remains exactly the same ---
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(

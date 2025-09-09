@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import '../../routes/app_routes.dart';
+import '../../routes/app_routes.dart'; // We now use named routes
+
+// We no longer need to import request_station_page.dart here
 
 class StationOwnerDashboard extends StatefulWidget {
   final String role;
-  const StationOwnerDashboard({super.key, required this.role});
+  final String email;
+  const StationOwnerDashboard({super.key, required this.role, required this.email});
 
   @override
   State<StationOwnerDashboard> createState() => _StationOwnerDashboardState();
@@ -12,7 +15,6 @@ class StationOwnerDashboard extends StatefulWidget {
 
 class _StationOwnerDashboardState extends State<StationOwnerDashboard> {
   int _selectedIndex = 0;
-  // State variables for dashboard data
   int _totalStations = 0;
   int _totalChargers = 0;
   double _totalRevenue = 0.0;
@@ -25,13 +27,12 @@ class _StationOwnerDashboardState extends State<StationOwnerDashboard> {
     _fetchDashboardData();
   }
 
-  // Fetches dashboard data from Firestore
   Future<void> _fetchDashboardData() async {
-    // In a real application, you would filter this data by the current user's ID
-    // For example: .where('ownerId', isEqualTo: currentUserId)
+    // This logic remains the same
     try {
       final stationsQuery = await FirebaseFirestore.instance
           .collection('stations')
+          .where('ownerEmail', isEqualTo: widget.email) // Filter by the current owner's email
           .get();
       final issuesQuery = await FirebaseFirestore.instance
           .collection('issues')
@@ -40,64 +41,31 @@ class _StationOwnerDashboardState extends State<StationOwnerDashboard> {
       int totalChargersCount = 0;
       double totalRevenueAmount = 0.0;
 
-      // Loop through stations to get total chargers and revenue
       for (var doc in stationsQuery.docs) {
         final data = doc.data();
         totalChargersCount += (data['chargerCount'] ?? 0) is int
             ? (data['chargerCount'] ?? 0) as int
             : ((data['chargerCount'] ?? 0) as num).toInt();
-        totalRevenueAmount += data['totalRevenue'] ?? 0.0;
+        totalRevenueAmount += (data['totalRevenue'] ?? 0.0) as double;
       }
 
-      setState(() {
-        _totalStations = stationsQuery.size;
-        _totalChargers = totalChargersCount;
-        _totalRevenue = totalRevenueAmount;
-        _issuesReported = issuesQuery.size;
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _totalStations = stationsQuery.size;
+          _totalChargers = totalChargersCount;
+          _totalRevenue = totalRevenueAmount;
+          _issuesReported = issuesQuery.size;
+          _isLoading = false;
+        });
+      }
     } catch (e) {
-      // Handle errors gracefully
-      setState(() {
-        _isLoading = false;
-        // Optionally, show a toast or a snackbar with an error message
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to load dashboard data: ${e.toString()}'),
-          ),
-        );
-      });
+      if (mounted) setState(() => _isLoading = false);
+      print("Error fetching dashboard data: $e");
     }
   }
 
   void _onItemTapped(int index) {
-    setState(() {
-      _selectedIndex = index;
-    });
-    // Add navigation logic here based on the index
-    switch (index) {
-      case 0:
-        // Already on the dashboard
-        break;
-      case 1:
-        // Navigate to Stations management page
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Navigate to Manage Stations')),
-        );
-        break;
-      case 2:
-        // Navigate to Reports page
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Navigate to Reports')));
-        break;
-      case 3:
-        // Navigate to Profile page
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Navigate to Profile')));
-        break;
-    }
+    setState(() => _selectedIndex = index);
   }
 
   Widget _buildSummaryCard(IconData icon, String title, String value) {
@@ -138,11 +106,7 @@ class _StationOwnerDashboardState extends State<StationOwnerDashboard> {
     );
   }
 
-  Widget _buildActionButton(
-    IconData icon,
-    String label,
-    VoidCallback onPressed,
-  ) {
+  Widget _buildActionButton(IconData icon, String label, VoidCallback onPressed) {
     return Card(
       elevation: 0,
       shape: RoundedRectangleBorder(
@@ -178,6 +142,7 @@ class _StationOwnerDashboardState extends State<StationOwnerDashboard> {
           IconButton(
             icon: const Icon(Icons.logout_rounded, color: Colors.black),
             onPressed: () {
+              // TODO: Add proper logout logic (clear prefs, etc.)
               Navigator.pushReplacementNamed(context, AppRoutes.landing);
             },
             tooltip: 'Logout',
@@ -191,7 +156,6 @@ class _StationOwnerDashboardState extends State<StationOwnerDashboard> {
             : Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Summary cards grid
                   GridView.count(
                     crossAxisCount: 2,
                     shrinkWrap: true,
@@ -232,15 +196,12 @@ class _StationOwnerDashboardState extends State<StationOwnerDashboard> {
                     ),
                   ),
                   const SizedBox(height: 16),
+                  // --- 4. USE THE NAMED ROUTE ---
                   _buildActionButton(
                     Icons.add_circle_outline,
                     'Request New Station',
                     () {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Requesting a new station'),
-                        ),
-                      );
+                      Navigator.pushNamed(context, AppRoutes.requestStation);
                     },
                   ),
                   _buildActionButton(

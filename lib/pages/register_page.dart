@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart'; // <-- 1. IMPORT FIREBASE AUTH
-import 'login_page.dart'; // Import your LoginPage
+import 'package:firebase_auth/firebase_auth.dart';
+import 'login_page.dart';
 
 class RegisterPage extends StatefulWidget {
   const RegisterPage({super.key});
@@ -47,13 +47,10 @@ class _RegisterPageState extends State<RegisterPage> {
     );
   }
 
-  // =========================================================================
-  // --- 2. MODIFIED: The _register function now uses Firebase Auth ---
-  // =========================================================================
   Future<void> _register() async {
     if (_formKey.currentState!.validate()) {
       final confirmed = await _showConfirmationDialog(context);
-      if (confirmed != true) return; // Exit if user cancels
+      if (confirmed != true) return;
 
       setState(() {
         _loading = true;
@@ -65,29 +62,20 @@ class _RegisterPageState extends State<RegisterPage> {
         final email = _emailController.text.trim();
         final password = _passwordController.text.trim();
 
-        // Step 1: Create the user in Firebase Authentication
-        // This is the primary, secure way to create a user.
-        // It will fail if the email is already in use by the Auth service.
         await FirebaseAuth.instance.createUserWithEmailAndPassword(
           email: email,
           password: password,
         );
 
-        // Step 2: Create the user's profile document in Firestore.
-        // We use the same email as the document ID for consistency.
         await FirebaseFirestore.instance.collection('users').doc(email).set({
           'fullName': fullName,
           'email': email,
-          // ⚠️ SECURITY NOTE: Storing the password here is redundant and insecure.
-          // Firebase Auth handles password storage securely. We keep it for now
-          // to maintain compatibility with your existing login logic.
-          // In a real app, you would remove this line.
           'password': password,
           'role': _selectedRole,
           'createdAt': FieldValue.serverTimestamp(),
+          'isActive': true, // Set user as active by default
         });
 
-        // Registration is successful, show a success message and navigate
         if (mounted) {
           await showDialog(
             context: context,
@@ -99,7 +87,7 @@ class _RegisterPageState extends State<RegisterPage> {
                 actions: [
                   TextButton(
                     onPressed: () {
-                      Navigator.of(dialogContext).pop(); // Close dialog
+                      Navigator.of(dialogContext).pop();
                       Navigator.pushReplacement(
                         context,
                         MaterialPageRoute(builder: (context) => const LoginPage()),
@@ -113,7 +101,6 @@ class _RegisterPageState extends State<RegisterPage> {
           );
         }
       } on FirebaseAuthException catch (e) {
-        // Handle specific Firebase Authentication errors
         if (e.code == 'weak-password') {
           _error = 'The password provided is too weak.';
         } else if (e.code == 'email-already-in-use') {
@@ -123,7 +110,6 @@ class _RegisterPageState extends State<RegisterPage> {
         }
         setState(() {});
       } catch (e) {
-        // Handle other errors (like Firestore issues or network problems)
         setState(() {
           _error = 'An unexpected error occurred: ${e.toString()}';
         });
@@ -137,7 +123,6 @@ class _RegisterPageState extends State<RegisterPage> {
     }
   }
   
-  // The build method remains exactly the same. No UI changes are needed.
   @override
   Widget build(BuildContext context) {
     return Scaffold(
