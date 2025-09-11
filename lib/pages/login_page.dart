@@ -60,8 +60,6 @@ class _LoginPageState extends State<LoginPage> {
           return;
         }
 
-        // --- START of platform-specific code ---
-        // This block will now only run if the app is NOT running on the web.
         if (!kIsWeb) {
           try {
             await FirebaseMessaging.instance.requestPermission();
@@ -71,35 +69,38 @@ class _LoginPageState extends State<LoginPage> {
               print('FCM Token successfully updated for user: $email');
             }
           } catch (e) {
-            // It's good practice to log errors, even if we're moving on.
             print('Error updating FCM token on mobile: $e');
           }
         } else {
-          // Optional: Log that we're skipping this on the web for debugging purposes.
           print('Skipping FCM token update on web platform.');
         }
-        // --- END of platform-specific code ---
 
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('lastRole', data['role'] ?? '');
         await prefs.setString('email', email);
 
+        // --- CHANGE: Use pushNamedAndRemoveUntil to clear the navigation stack ---
+        final routePredicate = (Route<dynamic> route) => false;
+
         if (data['role'] == 'EV User') {
-          Navigator.pushReplacementNamed(
+          Navigator.pushNamedAndRemoveUntil(
             context,
             AppRoutes.evuserDashboard,
+            routePredicate,
             arguments: {'role': data['role'], 'email': email},
           );
         } else if (data['role'] == 'Station Owner') {
-          Navigator.pushReplacementNamed(
+          Navigator.pushNamedAndRemoveUntil(
             context,
             AppRoutes.stationOwnerDashboard,
+            routePredicate,
             arguments: {'role': data['role'], 'email': email},
           );
         } else if (data['role'] == 'admin') {
-          Navigator.pushReplacementNamed(
+          Navigator.pushNamedAndRemoveUntil(
             context,
             AppRoutes.adminDashboard,
+            routePredicate,
             arguments: data['role'],
           );
         } else {

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_database/firebase_database.dart';
 import '../../routes/app_routes.dart'; // Import your app routes
 
 class EVUserProfile extends StatefulWidget {
@@ -45,6 +46,99 @@ class _EVUserProfileState extends State<EVUserProfile> {
     }
   }
 
+  Future<void> _showEditThresholdDialog() async {
+    final currentThreshold = (_userData?['aiRecommendationThreshold'] as num?)?.toDouble() ?? 30.0;
+    double newThreshold = currentThreshold;
+
+    final result = await showDialog<double>(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('Edit AI Threshold'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'Notify me when battery is below ${newThreshold.round()}%',
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 16),
+                  Slider(
+                    value: newThreshold,
+                    min: 10,
+                    max: 50,
+                    divisions: 8,
+                    label: '${newThreshold.round()}%',
+                    onChanged: (value) {
+                      setDialogState(() => newThreshold = value);
+                    },
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: () => Navigator.of(context).pop(newThreshold),
+                  child: const Text('Save'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (result != null && result != currentThreshold) {
+      _updateThreshold(result);
+    }
+  }
+
+  Future<void> _updateThreshold(double newValue) async {
+    final email = _userData?['email'];
+    if (email == null) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Saving new threshold...')),
+    );
+
+    try {
+      final String encodedEmail = email.toString().replaceAll('.', ',');
+
+      // Update Firestore
+      await FirebaseFirestore.instance.collection('users').doc(email).update({
+        'aiRecommendationThreshold': newValue,
+      });
+
+      // Update Realtime Database
+      await FirebaseDatabase.instance.ref('vehicles/$encodedEmail').update({
+        'aiRecommendationThreshold': newValue,
+      });
+
+      // Refresh local state to show the new value immediately
+      setState(() {
+        _userData?['aiRecommendationThreshold'] = newValue;
+      });
+
+      if(mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Threshold updated successfully!'), backgroundColor: Colors.green),
+        );
+      }
+    } catch (e) {
+      if(mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to update threshold: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+
   @override
   Widget build(BuildContext context) {
     String vehicleInfo = "Not Provided";
@@ -55,26 +149,17 @@ class _EVUserProfileState extends State<EVUserProfile> {
         vehicleInfo = '$brand $variant';
       }
     }
+    
+    final String thresholdInfo = 
+      "${(_userData?['aiRecommendationThreshold'] as num?)?.round() ?? '30'}%";
 
     return Scaffold(
       backgroundColor: Colors.grey[100],
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 1,
-        // --- CHANGE: The title has been removed for a cleaner look ---
-        title: const SizedBox.shrink(), 
+        title: const Text("Profile"), 
         iconTheme: const IconThemeData(color: Colors.black),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.edit_note_rounded),
-            onPressed: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Edit profile feature coming soon!')),
-              );
-            },
-            tooltip: 'Edit Profile',
-          ),
-        ],
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
@@ -112,6 +197,13 @@ class _EVUserProfileState extends State<EVUserProfile> {
                       const SizedBox(height: 24),
                       
                       // --- Section for user details ---
+                       _buildActionTile(
+                        icon: Icons.auto_awesome,
+                        title: "AI Alert Threshold",
+                        trailingText: thresholdInfo,
+                        onTap: _showEditThresholdDialog,
+                      ),
+                      const SizedBox(height: 12),
                       _buildInfoTile(
                         icon: Icons.electric_car_outlined,
                         title: "Vehicle",
@@ -140,7 +232,7 @@ class _EVUserProfileState extends State<EVUserProfile> {
                       const Divider(thickness: 0.5),
                       const SizedBox(height: 16),
                       
-                      // --- NEW: Section for support buttons ---
+                      // --- Section for support buttons ---
                       _buildActionTile(
                         icon: Icons.help_outline,
                         title: "Help & FAQ",
@@ -208,11 +300,11 @@ class _EVUserProfileState extends State<EVUserProfile> {
     );
   }
 
-  // --- NEW WIDGET: A clean, tappable tile for actions ---
   Widget _buildActionTile({
     required IconData icon,
     required String title,
     required VoidCallback onTap,
+    String? trailingText,
   }) {
     return Card(
       elevation: 1,
@@ -229,7 +321,22 @@ class _EVUserProfileState extends State<EVUserProfile> {
             color: Colors.black87,
           ),
         ),
-        trailing: const Icon(Icons.chevron_right, color: Colors.grey),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (trailingText != null)
+              Text(
+                trailingText,
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.black54,
+                ),
+              ),
+            const SizedBox(width: 8),
+            const Icon(Icons.chevron_right, color: Colors.grey),
+          ],
+        ),
       ),
     );
   }

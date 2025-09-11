@@ -16,6 +16,8 @@ class _EVUserSetupState extends State<EVUserSetup> {
   int _step = 0;
   String? selectedBrand;
   String? selectedVariant;
+  // --- ADD THRESHOLD STATE VARIABLE ---
+  double _aiThreshold = 30.0;
 
   List<String> brands = [];
   List<String> variants = [];
@@ -29,7 +31,7 @@ class _EVUserSetupState extends State<EVUserSetup> {
     _fetchBrands();
   }
 
-  // --- 2. ADD HELPER FUNCTION (for consistency) ---
+  // --- (existing _encodeEmailForRtdb, _fetchBrands, _fetchVariants methods) ---
   String _encodeEmailForRtdb(String email) {
     return email.replaceAll('.', ',');
   }
@@ -80,8 +82,9 @@ class _EVUserSetupState extends State<EVUserSetup> {
     }
   }
 
+
   // =========================================================================
-  // --- 3. MODIFIED FUNCTION: Write to both Firestore and RTDB ---
+  // --- MODIFIED FUNCTION: Write to both Firestore and RTDB with new field ---
   // =========================================================================
   Future<void> _completeSetup() async {
     String email = widget.email;
@@ -100,11 +103,12 @@ class _EVUserSetupState extends State<EVUserSetup> {
     }
     try {
       // --- Write to Firestore (permanent user profile) ---
-      // This part remains the same.
       await FirebaseFirestore.instance.collection('users').doc(email).set({
         'brand': selectedBrand,
         'variant': selectedVariant,
         'setupComplete': true,
+        // --- ADD NEW FIELD ---
+        'aiRecommendationThreshold': _aiThreshold,
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
 
@@ -117,6 +121,8 @@ class _EVUserSetupState extends State<EVUserSetup> {
         'variant': selectedVariant,
         'isRunning': false, // Default "at rest" state
         'batteryLevel': 100,  // Default "at rest" state
+        // --- ADD NEW FIELD ---
+        'aiRecommendationThreshold': _aiThreshold,
       });
 
       if (mounted) {
@@ -131,11 +137,14 @@ class _EVUserSetupState extends State<EVUserSetup> {
     }
   }
 
+  // --- UPDATE NAVIGATION LOGIC ---
   void _nextStep() {
     if (_step == 0 && selectedBrand != null) {
       _fetchVariants(selectedBrand!);
       setState(() => _step = 1);
     } else if (_step == 1 && selectedVariant != null) {
+      setState(() => _step = 2); // Move to the new threshold step
+    } else if (_step == 2) {
       _completeSetup();
     }
   }
@@ -152,12 +161,16 @@ class _EVUserSetupState extends State<EVUserSetup> {
               if (_step > 0)
                 IconButton(
                   tooltip: 'Back',
-                  onPressed: () => setState(() => _step = 0),
+                  onPressed: () => setState(() => _step--), // Simple decrement
                   icon: const Icon(Icons.arrow_back_rounded),
                 ),
               Expanded(
                 child: Text(
-                  _step == 0 ? 'Select Brand' : 'Select Variant',
+                  _step == 0
+                      ? 'Select Brand'
+                      : _step == 1
+                          ? 'Select Variant'
+                          : 'Set AI Alert Threshold', // New title
                   textAlign: TextAlign.center,
                   style: const TextStyle(
                     fontSize: 18,
@@ -172,7 +185,11 @@ class _EVUserSetupState extends State<EVUserSetup> {
           Expanded(
             child: AnimatedSwitcher(
               duration: const Duration(milliseconds: 300),
-              child: _step == 0 ? _buildBrandStep() : _buildVariantStep(),
+              child: _step == 0
+                  ? _buildBrandStep()
+                  : _step == 1
+                      ? _buildVariantStep()
+                      : _buildThresholdStep(), // New step widget
             ),
           ),
           const SizedBox(height: 8),
@@ -180,10 +197,11 @@ class _EVUserSetupState extends State<EVUserSetup> {
             width: double.infinity,
             child: ElevatedButton(
               onPressed: (_step == 0 && selectedBrand != null) ||
-                      (_step == 1 && selectedVariant != null)
+                      (_step == 1 && selectedVariant != null) ||
+                      (_step == 2) // Always enabled on step 2
                   ? _nextStep
                   : null,
-              child: Text(_step == 0 ? 'Next' : 'Finish'),
+              child: Text(_step == 2 ? 'Finish' : 'Next'), // Updated button text
             ),
           ),
         ],
@@ -234,6 +252,46 @@ class _EVUserSetupState extends State<EVUserSetup> {
           onTap: () => setState(() => selectedVariant = v),
         );
       },
+    );
+  }
+  
+  // --- ADD NEW WIDGET FOR THRESHOLD STEP ---
+  Widget _buildThresholdStep() {
+    return Padding(
+      key: const ValueKey('thresholdStep'),
+      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 24.0),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Text(
+            'Notify me for charging recommendations when my battery drops below:',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 16),
+          ),
+          const SizedBox(height: 24),
+          Text(
+            '${_aiThreshold.round()}%',
+            style: const TextStyle(
+              fontSize: 48,
+              fontWeight: FontWeight.bold,
+              color: Colors.blueAccent,
+            ),
+          ),
+          const SizedBox(height: 16),
+          Slider(
+            value: _aiThreshold,
+            min: 10,
+            max: 50,
+            divisions: 8, // (50-10)/5 = 8 divisions for 5% steps
+            label: '${_aiThreshold.round()}%',
+            onChanged: (double value) {
+              setState(() {
+                _aiThreshold = value;
+              });
+            },
+          ),
+        ],
+      ),
     );
   }
 }

@@ -1,3 +1,5 @@
+// lib/pages/evuser/live_map_page.dart
+
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
@@ -28,6 +30,8 @@ class _LiveMapPageState extends State<LiveMapPage> {
   Marker? _userCarMarker;
   Polyline? _routePolyline;
   bool _isLoadingRoute = false;
+  // --- NEW: Track if the map has been centered on the car yet ---
+  bool _hasCenteredOnCar = false;
 
   @override
   void initState() {
@@ -86,6 +90,14 @@ class _LiveMapPageState extends State<LiveMapPage> {
       if (lat != null && lng != null) {
         final newPosition = LatLng(lat, lng);
 
+        // --- THE FIX IS HERE ---
+        // If we are NOT in navigation mode and haven't centered yet, do it now.
+        if (widget.destination == null && !_hasCenteredOnCar) {
+          _mapController.move(newPosition, 15.0);
+          _hasCenteredOnCar = true; // Mark as centered so we don't keep jumping
+        }
+        
+        // If we ARE in navigation mode, let the fitBounds logic handle centering.
         if (widget.destination != null && _routePolyline == null && !_isLoadingRoute) {
           _fetchAndDrawRoute(newPosition, widget.destination!);
         }
@@ -95,7 +107,9 @@ class _LiveMapPageState extends State<LiveMapPage> {
             _userCarMarker = Marker(
               width: 40.0, height: 40.0,
               point: newPosition,
-              child: Image.asset('assets/images/car_marker.png'),
+              // Using a pre-made asset for the car is better for performance.
+              // Make sure you have a 'car_marker.png' in an 'assets/images/' folder.
+              child: Image.asset('assets/images/car_marker.png'), 
             );
           });
         }
@@ -126,7 +140,9 @@ class _LiveMapPageState extends State<LiveMapPage> {
 
           // Wait for the map to be ready before fitting bounds
           WidgetsBinding.instance.addPostFrameCallback((_) {
-            final bounds = LatLngBounds.fromPoints([start, end, ...routePoints]);
+            if (!mounted) return;
+            // The bounds should now include the user's car and the destination.
+            final bounds = LatLngBounds.fromPoints([start, end]);
             _mapController.fitCamera(
               CameraFit.bounds(bounds: bounds, padding: const EdgeInsets.all(50)),
             );
@@ -156,7 +172,8 @@ class _LiveMapPageState extends State<LiveMapPage> {
           FlutterMap(
             mapController: _mapController,
             options: MapOptions(
-              initialCenter: _userCarMarker?.point ?? const LatLng(12.9716, 77.5946),
+              // Start with a generic center, it will be moved once data arrives.
+              initialCenter: const LatLng(12.9716, 77.5946),
               initialZoom: 14.0,
             ),
             children: [

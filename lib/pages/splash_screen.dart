@@ -18,36 +18,56 @@ class _SplashScreenState extends State<SplashScreen> {
   }
 
   Future<void> _navigateToNextScreen() async {
-    // Wait for 3 seconds to show the splash screen
     await Future.delayed(const Duration(seconds: 3));
 
-    if (!mounted) return; // Check if the widget is still in the tree
+    if (!mounted) return;
 
-    // Determine the next route based on the saved user session
     final prefs = await SharedPreferences.getInstance();
     final lastRole = prefs.getString('lastRole');
     final email = prefs.getString('email');
 
     String nextRoute = AppRoutes.landing;
     Object? routeArguments;
+    bool clearStack = false; // Flag to determine navigation method
 
-    if (lastRole == 'EV User' && email != null) {
-      nextRoute = AppRoutes.evuserDashboard;
-      routeArguments = {'role': lastRole, 'email': email};
-    } else if (lastRole == 'Station Owner' && email != null) {
-      nextRoute = AppRoutes.stationOwnerDashboard;
-      routeArguments = {'role': lastRole, 'email': email};
-    } else if (lastRole == 'admin') {
-      nextRoute = AppRoutes.adminDashboard;
-      routeArguments = lastRole;
+    if (lastRole != null && email != null) {
+      clearStack = true; // A user is logged in, so we clear the stack
+      switch (lastRole) {
+        case 'EV User':
+          nextRoute = AppRoutes.evuserDashboard;
+          routeArguments = {'role': lastRole, 'email': email};
+          break;
+        case 'Station Owner':
+          nextRoute = AppRoutes.stationOwnerDashboard;
+          routeArguments = {'role': lastRole, 'email': email};
+          break;
+        case 'admin':
+          nextRoute = AppRoutes.adminDashboard;
+          routeArguments = lastRole;
+          break;
+        default:
+          clearStack = false; // Unknown role, go to landing page
+          nextRoute = AppRoutes.landing;
+          break;
+      }
     }
-    
-    // Navigate and replace the splash screen in the stack so the user can't go back to it
-    Navigator.pushReplacementNamed(
-      context,
-      nextRoute,
-      arguments: routeArguments,
-    );
+
+    if (clearStack) {
+      // If a user is logged in, remove all previous routes.
+      Navigator.pushNamedAndRemoveUntil(
+        context,
+        nextRoute,
+        (route) => false,
+        arguments: routeArguments,
+      );
+    } else {
+      // If no user, just replace the splash screen with the landing page.
+      Navigator.pushReplacementNamed(
+        context,
+        nextRoute,
+        arguments: routeArguments,
+      );
+    }
   }
 
   @override
@@ -58,13 +78,11 @@ class _SplashScreenState extends State<SplashScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // Your Logo Image
             Image.asset(
-              'assets/images/logo.jpg', // Make sure this path is correct
+              'assets/images/logo.jpg',
               height: 180,
             ),
             const SizedBox(height: 24),
-            // Your App Name
             const Text(
               'EV Smart Charge',
               style: TextStyle(
@@ -75,7 +93,6 @@ class _SplashScreenState extends State<SplashScreen> {
               ),
             ),
             const SizedBox(height: 80),
-            // A loading indicator for a better UX
             const CircularProgressIndicator(
               valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
             ),
