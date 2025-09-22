@@ -3,12 +3,15 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:geolocator/geolocator.dart';
 
+import '../station_details_page.dart';
+
 // Helper class to hold both station data and its calculated distance
 class StationWithDistance {
   final QueryDocumentSnapshot stationDoc;
   final double distanceInMeters;
 
-  StationWithDistance({required this.stationDoc, required this.distanceInMeters});
+  StationWithDistance(
+      {required this.stationDoc, required this.distanceInMeters});
 
   Map<String, dynamic> get data => stationDoc.data() as Map<String, dynamic>;
 }
@@ -19,7 +22,7 @@ class NearbyStationsWidget extends StatefulWidget {
   final Function(List<StationWithDistance>) onStationsSorted;
 
   const NearbyStationsWidget({
-    super.key, 
+    super.key,
     required this.email,
     required this.onStationsSorted,
   });
@@ -43,7 +46,8 @@ class _NearbyStationsWidgetState extends State<NearbyStationsWidget> {
 
   Future<void> _fetchStations() async {
     try {
-      final snapshot = await FirebaseFirestore.instance.collection('stations').get();
+      final snapshot =
+          await FirebaseFirestore.instance.collection('stations').get();
       if (mounted) {
         setState(() {
           _allStations = snapshot.docs;
@@ -64,7 +68,8 @@ class _NearbyStationsWidgetState extends State<NearbyStationsWidget> {
     return email.replaceAll('.', ',');
   }
 
-  List<StationWithDistance> _calculateAndSortStations(double userLat, double userLng) {
+  List<StationWithDistance> _calculateAndSortStations(
+      double userLat, double userLng) {
     if (_allStations.isEmpty) return [];
     List<StationWithDistance> stationsWithDistances = [];
     for (var stationDoc in _allStations) {
@@ -72,11 +77,14 @@ class _NearbyStationsWidgetState extends State<NearbyStationsWidget> {
       final stationLat = data['latitude'];
       final stationLng = data['longitude'];
       if (stationLat != null && stationLng != null) {
-        final distance = Geolocator.distanceBetween(userLat, userLng, stationLat, stationLng);
-        stationsWithDistances.add(StationWithDistance(stationDoc: stationDoc, distanceInMeters: distance));
+        final distance = Geolocator.distanceBetween(
+            userLat, userLng, stationLat, stationLng);
+        stationsWithDistances.add(StationWithDistance(
+            stationDoc: stationDoc, distanceInMeters: distance));
       }
     }
-    stationsWithDistances.sort((a, b) => a.distanceInMeters.compareTo(b.distanceInMeters));
+    stationsWithDistances
+        .sort((a, b) => a.distanceInMeters.compareTo(b.distanceInMeters));
     return stationsWithDistances;
   }
 
@@ -90,38 +98,50 @@ class _NearbyStationsWidgetState extends State<NearbyStationsWidget> {
 
   @override
   Widget build(BuildContext context) {
-    final vehicleRtdbRef = FirebaseDatabase.instance.ref('vehicles/${_encodeEmailForRtdb(widget.email)}');
+    final vehicleRtdbRef = FirebaseDatabase.instance
+        .ref('vehicles/${_encodeEmailForRtdb(widget.email)}');
 
     return StreamBuilder<DatabaseEvent>(
       stream: vehicleRtdbRef.onValue,
       builder: (context, snapshot) {
         if (_isLoadingStations) {
-          return const SizedBox(height: 150, child: Center(child: CircularProgressIndicator()));
+          return const SizedBox(
+              height: 150, child: Center(child: CircularProgressIndicator()));
         }
         if (_stationError != null) {
-          return SizedBox(height: 150, child: Center(child: Text(_stationError!, style: const TextStyle(color: Colors.red))));
+          return SizedBox(
+              height: 150,
+              child: Center(
+                  child: Text(_stationError!,
+                      style: const TextStyle(color: Colors.red))));
         }
         if (!snapshot.hasData || snapshot.data?.snapshot.value == null) {
-          return const SizedBox(height: 150, child: Center(child: Text("Waiting for live location...")));
+          return const SizedBox(
+              height: 150,
+              child: Center(child: Text("Waiting for live location...")));
         }
 
-        final data = Map<String, dynamic>.from(snapshot.data!.snapshot.value as Map);
+        final data =
+            Map<String, dynamic>.from(snapshot.data!.snapshot.value as Map);
         final userLat = data['latitude'];
         final userLng = data['longitude'];
 
         if (userLat == null || userLng == null) {
-          return const SizedBox(height: 150, child: Center(child: Text("Simulator has no location data.")));
+          return const SizedBox(
+              height: 150,
+              child: Center(child: Text("Simulator has no location data.")));
         }
 
         final sortedStations = _calculateAndSortStations(userLat, userLng);
-        
+
         // Use the callback to notify the parent of the newly sorted list
         WidgetsBinding.instance.addPostFrameCallback((_) {
           widget.onStationsSorted(sortedStations);
         });
-        
+
         if (sortedStations.isEmpty) {
-          return const SizedBox(height: 150, child: Center(child: Text("No stations found.")));
+          return const SizedBox(
+              height: 150, child: Center(child: Text("No stations found.")));
         }
 
         return SizedBox(
@@ -133,8 +153,7 @@ class _NearbyStationsWidgetState extends State<NearbyStationsWidget> {
             itemBuilder: (context, index) {
               final station = sortedStations[index];
               return _buildStationCard(
-                station.data['name'] ?? 'Unknown',
-                '${_formatDistance(station.distanceInMeters)} - ${station.data['availableSlots'] ?? '?'} slots',
+                station,
                 Colors.primaries[index % Colors.primaries.length].shade700,
               );
             },
@@ -144,15 +163,27 @@ class _NearbyStationsWidgetState extends State<NearbyStationsWidget> {
     );
   }
 
-  Widget _buildStationCard(String name, String details, Color color) {
+  Widget _buildStationCard(StationWithDistance station, Color color) {
+    final name = station.data['name'] ?? 'Unknown';
+    final details =
+        '${_formatDistance(station.distanceInMeters)} - ${station.data['availableSlots'] ?? '?'} slots';
+
     return GestureDetector(
-      onTap: () => ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Navigating to $name...'))),
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) =>
+                StationDetailsPage(station: station, email: widget.email),
+          ),
+        );
+      },
       child: Container(
         width: 150,
         margin: const EdgeInsets.only(right: 16),
         padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(16)),
+        decoration: BoxDecoration(
+            color: color, borderRadius: BorderRadius.circular(16)),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -161,9 +192,13 @@ class _NearbyStationsWidgetState extends State<NearbyStationsWidget> {
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                Text(name,
+                    style: const TextStyle(
+                        color: Colors.white, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 4),
-                Text(details, style: TextStyle(color: Colors.white.withOpacity(0.8), fontSize: 12)),
+                Text(details,
+                    style: TextStyle(
+                        color: Colors.white.withOpacity(0.8), fontSize: 12)),
               ],
             ),
           ],

@@ -15,6 +15,7 @@ import 'ai_recommendation_page.dart';
 import '../../services/ai_recommendation_service.dart';
 import 'live_map_page.dart';
 import 'all_stations_status_page.dart';
+import 'notifications_page.dart';
 
 // THIS IS THE CONTENT FOR THE FIRST TAB
 class HomePage extends StatefulWidget {
@@ -27,9 +28,10 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   bool _isAiLoading = false;
+  bool _showLowBatteryWarning = true;
   List<StationWithDistance> _sortedStations = [];
   late final Stream<DatabaseEvent> _vehicleStream;
-  
+
   String _currentLocationName = 'Determining location...';
   LatLng? _lastKnownPosition;
   bool _isFetchingLocationName = false;
@@ -46,26 +48,35 @@ class _HomePageState extends State<HomePage> {
   String _encodeEmailForRtdb(String email) {
     return email.replaceAll('.', ',');
   }
-  
-  Future<void> _updateLocationNameFromCoordinates(double lat, double lng) async {
+
+  Future<void> _updateLocationNameFromCoordinates(
+      double lat, double lng) async {
     if (_isFetchingLocationName) return;
-    
+
     if (mounted) setState(() => _isFetchingLocationName = true);
 
     try {
       List<Placemark> placemarks = await placemarkFromCoordinates(lat, lng);
       if (placemarks.isNotEmpty && mounted) {
         final p = placemarks.first;
-        final address = [p.street, p.locality, p.country].where((e) => e != null && e.isNotEmpty).join(', ');
+        final address = [p.street, p.locality, p.country]
+            .where((e) => e != null && e.isNotEmpty)
+            .join(', ');
         setState(() {
           _currentLocationName = address.isEmpty ? 'Unknown Area' : address;
         });
       }
     } catch (e) {
-      if (mounted) setState(() => _currentLocationName = 'Could not determine location');
-      print("Error fetching location name: $e");
+      // On emulators, reverse geocoding can fail. Fallback to showing coordinates.
+      if (mounted) {
+        setState(() {
+          _currentLocationName =
+              'Lat: ${lat.toStringAsFixed(4)}, Lng: ${lng.toStringAsFixed(4)}';
+        });
+      }
+      print("Error fetching location name (falling back to coordinates): $e");
     } finally {
-      if(mounted) setState(() => _isFetchingLocationName = false);
+      if (mounted) setState(() => _isFetchingLocationName = false);
     }
   }
 
@@ -74,7 +85,10 @@ class _HomePageState extends State<HomePage> {
     setState(() => _isAiLoading = true);
 
     try {
-      final userDoc = await FirebaseFirestore.instance.collection('users').doc(widget.email).get();
+      final userDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(widget.email)
+          .get();
       final brand = userDoc.data()?['brand'] ?? 'Unknown EV';
       final variant = userDoc.data()?['variant'] ?? '';
       final userVehicle = '$brand $variant'.trim();
@@ -102,19 +116,24 @@ class _HomePageState extends State<HomePage> {
       );
 
       if (mounted && recommendationData != null) {
-        final reason = recommendationData['reason'] as String? ?? 'Here are your top recommendations.';
-        final recommendedNames = (recommendationData['recommendations'] as List<dynamic>).cast<String>();
+        final reason = recommendationData['reason'] as String? ??
+            'Here are your top recommendations.';
+        final recommendedNames =
+            (recommendationData['recommendations'] as List<dynamic>)
+                .cast<String>();
 
         final List<StationWithDistance> rankedStations = [];
         for (final name in recommendedNames) {
-          final matchedStation = _sortedStations.where((s) => s.data['name'] == name);
+          final matchedStation =
+              _sortedStations.where((s) => s.data['name'] == name);
           if (matchedStation.isNotEmpty) {
             rankedStations.add(matchedStation.first);
           } else {
-            print("Warning: AI recommended a station ('$name') that could not be found in the local list.");
+            print(
+                "Warning: AI recommended a station ('$name') that could not be found in the local list.");
           }
         }
-        
+
         await Navigator.push(
           context,
           MaterialPageRoute(
@@ -125,7 +144,6 @@ class _HomePageState extends State<HomePage> {
             ),
           ),
         );
-
       } else {
         throw Exception("AI failed to provide a recommendation.");
       }
@@ -142,7 +160,7 @@ class _HomePageState extends State<HomePage> {
       if (mounted) setState(() => _isAiLoading = false);
     }
   }
-  
+
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<DatabaseEvent>(
@@ -161,7 +179,8 @@ class _HomePageState extends State<HomePage> {
           );
           batteryLevel = (data['batteryLevel'] as num?)?.toInt() ?? 100;
           isRunning = data['isRunning'] ?? false;
-          aiThreshold = (data['aiRecommendationThreshold'] as num?)?.toDouble() ?? 30.0;
+          aiThreshold =
+              (data['aiRecommendationThreshold'] as num?)?.toDouble() ?? 30.0;
           isLowBattery = batteryLevel <= aiThreshold;
 
           final lat = data['latitude'];
@@ -169,9 +188,15 @@ class _HomePageState extends State<HomePage> {
 
           if (lat != null && lng != null) {
             final newPosition = LatLng(lat, lng);
-            if (_lastKnownPosition == null || Geolocator.distanceBetween(_lastKnownPosition!.latitude, _lastKnownPosition!.longitude, newPosition.latitude, newPosition.longitude) > 20) {
+            if (_lastKnownPosition == null ||
+                Geolocator.distanceBetween(
+                        _lastKnownPosition!.latitude,
+                        _lastKnownPosition!.longitude,
+                        newPosition.latitude,
+                        newPosition.longitude) >
+                    20) {
               _lastKnownPosition = newPosition;
-              
+
               WidgetsBinding.instance.addPostFrameCallback((_) {
                 if (mounted) {
                   _updateLocationNameFromCoordinates(lat, lng);
@@ -187,13 +212,14 @@ class _HomePageState extends State<HomePage> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               // --- MODIFIED USAGE OF THE WARNING WIDGET ---
-              if (isLowBattery) ...[
+              if (isLowBattery && _showLowBatteryWarning) ...[
                 _buildLowBatteryWarning(
                   batteryLevel: batteryLevel.toDouble(),
                   // Pass the function to be called when the button is pressed
                   onFindStations: () {
                     _findBestStation(batteryLevel.toDouble());
-                  }
+                  },
+                  onClose: () => setState(() => _showLowBatteryWarning = false),
                 ),
                 const SizedBox(height: 24),
               ],
@@ -209,12 +235,13 @@ class _HomePageState extends State<HomePage> {
                 onPressed: () {
                   Navigator.push(
                     context,
-                    MaterialPageRoute(builder: (context) => LiveMapPage(email: widget.email)),
+                    MaterialPageRoute(
+                        builder: (context) => LiveMapPage(email: widget.email)),
                   );
                 },
               ),
               const SizedBox(height: 24),
-              
+
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 crossAxisAlignment: CrossAxisAlignment.center,
@@ -234,7 +261,9 @@ class _HomePageState extends State<HomePage> {
                         );
                       } else {
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text("Waiting for station data to load.")),
+                          const SnackBar(
+                              content:
+                                  Text("Waiting for station data to load.")),
                         );
                       }
                     },
@@ -243,37 +272,47 @@ class _HomePageState extends State<HomePage> {
                 ],
               ),
               const SizedBox(height: 8),
-              
+
               NearbyStationsWidget(
                 email: widget.email,
                 onStationsSorted: (sortedList) {
-                   WidgetsBinding.instance.addPostFrameCallback((_) {
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
                     if (mounted) {
                       setState(() {
-                         _sortedStations = sortedList;
+                        _sortedStations = sortedList;
                       });
                     }
-                   });
+                  });
                 },
               ),
               const SizedBox(height: 24),
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton.icon(
-                  onPressed: _isAiLoading ? null : () => _findBestStation(batteryLevel.toDouble()),
+                  onPressed: _isAiLoading
+                      ? null
+                      : () => _findBestStation(batteryLevel.toDouble()),
                   icon: _isAiLoading
                       ? Container(
-                          width: 24, height: 24, padding: const EdgeInsets.all(2.0),
-                          child: const CircularProgressIndicator(color: Colors.white, strokeWidth: 3),
+                          width: 24,
+                          height: 24,
+                          padding: const EdgeInsets.all(2.0),
+                          child: const CircularProgressIndicator(
+                              color: Colors.white, strokeWidth: 3),
                         )
                       : const Icon(Icons.auto_awesome),
-                  label: Text(_isAiLoading ? 'Analyzing...' : 'Get AI Recommendations'),
+                  label: Text(
+                      _isAiLoading ? 'Analyzing...' : 'Get AI Recommendations'),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: isLowBattery ? Colors.red.shade600 : const Color(0xFF6777EF),
+                    backgroundColor: isLowBattery
+                        ? Colors.red.shade600
+                        : const Color(0xFF6777EF),
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(vertical: 16),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                    textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                    textStyle: const TextStyle(
+                        fontSize: 16, fontWeight: FontWeight.bold),
                   ),
                 ),
               ),
@@ -290,7 +329,10 @@ class _HomePageState extends State<HomePage> {
   }
 
   // --- THIS IS THE NEW, INTERACTIVE WARNING WIDGET ---
-  Widget _buildLowBatteryWarning({required double batteryLevel, required VoidCallback onFindStations}) {
+  Widget _buildLowBatteryWarning(
+      {required double batteryLevel,
+      required VoidCallback onFindStations,
+      required VoidCallback onClose}) {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -302,8 +344,10 @@ class _HomePageState extends State<HomePage> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(Icons.battery_alert_rounded, color: Colors.red.shade700, size: 40),
+              Icon(Icons.battery_alert_rounded,
+                  color: Colors.red.shade700, size: 40),
               const SizedBox(width: 16),
               Expanded(
                 child: Column(
@@ -325,19 +369,33 @@ class _HomePageState extends State<HomePage> {
                   ],
                 ),
               ),
+              InkWell(
+                onTap: onClose,
+                borderRadius: BorderRadius.circular(30),
+                child: Padding(
+                  padding: const EdgeInsets.all(4.0),
+                  child:
+                      Icon(Icons.close, color: Colors.red.shade400, size: 20),
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 16),
           ElevatedButton.icon(
             icon: _isAiLoading
-                ? Container(width: 20, height: 20, child: const CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                ? Container(
+                    width: 20,
+                    height: 20,
+                    child: const CircularProgressIndicator(
+                        strokeWidth: 2, color: Colors.white))
                 : const Icon(Icons.auto_awesome, size: 20),
             label: Text(_isAiLoading ? 'Checking...' : 'Check It Out'),
             onPressed: _isAiLoading ? null : onFindStations,
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.red.shade700,
               foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10)),
             ),
           )
         ],
@@ -346,7 +404,10 @@ class _HomePageState extends State<HomePage> {
   }
 
   // (The rest of the helper widgets are unchanged)
-  Widget _buildActionButton({required IconData icon, required String label, required VoidCallback onPressed}) {
+  Widget _buildActionButton(
+      {required IconData icon,
+      required String label,
+      required VoidCallback onPressed}) {
     return OutlinedButton.icon(
       icon: Icon(icon),
       label: Text(label),
@@ -362,16 +423,23 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _buildSectionTitle(String title) {
-    return Text(title, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.black87));
+    return Text(title,
+        style: const TextStyle(
+            fontSize: 22, fontWeight: FontWeight.bold, color: Colors.black87));
   }
 
   Widget _buildBatteryStatus(int batteryLevel, String locationName) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('$batteryLevel%', style: const TextStyle(fontSize: 36, fontWeight: FontWeight.bold, color: Colors.black)),
+        Text('$batteryLevel%',
+            style: const TextStyle(
+                fontSize: 36,
+                fontWeight: FontWeight.bold,
+                color: Colors.black)),
         const SizedBox(height: 4),
-        Text('Current Location: $locationName', style: TextStyle(fontSize: 16, color: Colors.grey[600])),
+        Text('Current Location: $locationName',
+            style: TextStyle(fontSize: 16, color: Colors.grey[600])),
       ],
     );
   }
@@ -382,7 +450,12 @@ class _HomePageState extends State<HomePage> {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
-        boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.1), blurRadius: 10, offset: const Offset(0, 5))],
+        boxShadow: [
+          BoxShadow(
+              color: Colors.grey.withOpacity(0.1),
+              blurRadius: 10,
+              offset: const Offset(0, 5))
+        ],
       ),
       child: Row(
         children: [
@@ -390,14 +463,24 @@ class _HomePageState extends State<HomePage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(isRunning ? "Live Tracking Enabled" : "Enable Live Tracking", style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                Text(
+                    isRunning
+                        ? "Live Tracking Enabled"
+                        : "Enable Live Tracking",
+                    style: const TextStyle(
+                        fontSize: 16, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 8),
-                Text(isRunning ? "Monitoring your EV in real-time." : "Monitor your EV's battery and get alerts.", style: TextStyle(color: Colors.grey[600])),
+                Text(
+                    isRunning
+                        ? "Monitoring your EV in real-time."
+                        : "Monitor your EV's battery and get alerts.",
+                    style: TextStyle(color: Colors.grey[600])),
               ],
             ),
           ),
           const SizedBox(width: 16),
-          Icon(Icons.electric_car, size: 80, color: Colors.blueAccent.withOpacity(0.7)),
+          Icon(Icons.electric_car,
+              size: 80, color: Colors.blueAccent.withOpacity(0.7)),
         ],
       ),
     );
@@ -406,7 +489,8 @@ class _HomePageState extends State<HomePage> {
   Widget _buildChargingHistory() {
     return Container(
       padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16)),
+      decoration: BoxDecoration(
+          color: Colors.white, borderRadius: BorderRadius.circular(16)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -415,8 +499,12 @@ class _HomePageState extends State<HomePage> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
-              _buildHistoryBar('Mon', 0.8), _buildHistoryBar('Tue', 0.6), _buildHistoryBar('Wed', 0.9),
-              _buildHistoryBar('Thu', 0.4), _buildHistoryBar('Fri', 0.7), _buildHistoryBar('Sat', 0.5),
+              _buildHistoryBar('Mon', 0.8),
+              _buildHistoryBar('Tue', 0.6),
+              _buildHistoryBar('Wed', 0.9),
+              _buildHistoryBar('Thu', 0.4),
+              _buildHistoryBar('Fri', 0.7),
+              _buildHistoryBar('Sat', 0.5),
               _buildHistoryBar('Sun', 0.8),
             ],
           ),
@@ -429,13 +517,18 @@ class _HomePageState extends State<HomePage> {
     return Column(
       children: [
         Container(
-          height: 80, width: 20,
-          decoration: BoxDecoration(color: Colors.grey[200], borderRadius: BorderRadius.circular(4)),
+          height: 80,
+          width: 20,
+          decoration: BoxDecoration(
+              color: Colors.grey[200], borderRadius: BorderRadius.circular(4)),
           child: Align(
             alignment: Alignment.bottomCenter,
             child: Container(
-              height: 80 * heightFraction, width: 20,
-              decoration: BoxDecoration(color: Colors.grey[400], borderRadius: BorderRadius.circular(4)),
+              height: 80 * heightFraction,
+              width: 20,
+              decoration: BoxDecoration(
+                  color: Colors.grey[400],
+                  borderRadius: BorderRadius.circular(4)),
             ),
           ),
         ),
@@ -446,7 +539,6 @@ class _HomePageState extends State<HomePage> {
   }
 }
 
-
 // =========================================================================
 // The rest of this file (EVUserDashboard and its helper pages) is UNCHANGED
 // =========================================================================
@@ -455,7 +547,9 @@ class HistoryPage extends StatelessWidget {
   const HistoryPage({super.key});
   @override
   Widget build(BuildContext context) {
-    return const Center(child: Text('History Page - Coming Soon!', style: TextStyle(fontSize: 24)));
+    return const Center(
+        child: Text('History Page - Coming Soon!',
+            style: TextStyle(fontSize: 24)));
   }
 }
 
@@ -482,8 +576,8 @@ class EVUserDashboard extends StatefulWidget {
   final bool triggerAiRecommendation;
 
   const EVUserDashboard({
-    super.key, 
-    required this.role, 
+    super.key,
+    required this.role,
     required this.email,
     this.triggerAiRecommendation = false,
   });
@@ -502,11 +596,11 @@ class _EVUserDashboardState extends State<EVUserDashboard> {
 
   // We need to pass the email down to HomePage
   List<Widget> get _pages => [
-    HomePage(email: _email!),
-    const MapPlaceholderPage(),
-    const HistoryPage(),
-    const EVUserProfile(),
-  ];
+        HomePage(email: _email!),
+        const MapPlaceholderPage(),
+        const HistoryPage(),
+        const EVUserProfile(),
+      ];
 
   @override
   void initState() {
@@ -527,9 +621,15 @@ class _EVUserDashboardState extends State<EVUserDashboard> {
     }
     if (mounted) setState(() => _email = emailToUse);
     try {
-      final doc = await FirebaseFirestore.instance.collection('users').doc(emailToUse).get();
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(emailToUse)
+          .get();
       final data = doc.data();
-      if (!doc.exists || data == null || data['brand'] == null || (data['brand'] as String).isEmpty) {
+      if (!doc.exists ||
+          data == null ||
+          data['brand'] == null ||
+          (data['brand'] as String).isEmpty) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted) _showProfileSetupDialog();
         });
@@ -581,26 +681,40 @@ class _EVUserDashboardState extends State<EVUserDashboard> {
     }
   }
 
+  // --- NEW: AppBar is now built in a separate method ---
+  AppBar _buildAppBar(BuildContext context) {
+    return AppBar(
+      automaticallyImplyLeading: false,
+      title: const Text('EV Smart Charge',
+          style: TextStyle(fontWeight: FontWeight.bold, color: Colors.black)),
+      actions: [
+        IconButton(
+          onPressed: () {
+            // This push navigation should now work correctly.
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                  builder: (context) => const NotificationsPage()),
+            );
+          },
+          icon: const Icon(Icons.notifications_none, color: Colors.black),
+        ),
+      ],
+      backgroundColor: const Color(0xFFF8F9FA),
+      elevation: 0,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFF8F9FA),
-      appBar: AppBar(
-        automaticallyImplyLeading: false,
-        title: const Text('EV Smart Charge', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.black)),
-        actions: [
-          IconButton(
-            onPressed: () => ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Notifications Page Coming Soon!'))),
-            icon: const Icon(Icons.notifications_none, color: Colors.black),
-          ),
-        ],
-        backgroundColor: const Color(0xFFF8F9FA),
-        elevation: 0,
-      ),
+      appBar: _buildAppBar(context),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : _email == null
-              ? const Center(child: Text("Could not load user data. Please log in again."))
+              ? const Center(
+                  child: Text("Could not load user data. Please log in again."))
               : IndexedStack(index: _selectedIndex, children: _pages),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _selectedIndex,
@@ -614,7 +728,8 @@ class _EVUserDashboardState extends State<EVUserDashboard> {
           BottomNavigationBarItem(icon: Icon(Icons.home), label: 'Home'),
           BottomNavigationBarItem(icon: Icon(Icons.map_outlined), label: 'Map'),
           BottomNavigationBarItem(icon: Icon(Icons.history), label: 'History'),
-          BottomNavigationBarItem(icon: Icon(Icons.person_outline), label: 'Profile'),
+          BottomNavigationBarItem(
+              icon: Icon(Icons.person_outline), label: 'Profile'),
         ],
       ),
     );
