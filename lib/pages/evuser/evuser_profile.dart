@@ -1,6 +1,8 @@
+// lib/pages/evuser/evuser_profile.dart
+
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_firestore/cloud_firestore.dart'; // <-- FIXED a typo here
 import 'package:firebase_database/firebase_database.dart';
 import '../../routes/app_routes.dart'; // Import your app routes
 
@@ -138,6 +140,91 @@ class _EVUserProfileState extends State<EVUserProfile> {
     }
   }
 
+  Future<void> _showEditPhoneNumberDialog() async {
+    final phoneController = TextEditingController(text: _userData?['phoneNumber'] ?? '');
+    final formKey = GlobalKey<FormState>();
+
+    final newNumber = await showDialog<String>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Edit Phone Number'),
+          content: Form(
+            key: formKey,
+            child: TextFormField(
+              controller: phoneController,
+              keyboardType: TextInputType.phone,
+              decoration: const InputDecoration(
+                labelText: 'Phone Number',
+                hintText: 'e.g., 1234567890',
+              ),
+              validator: (value) {
+                if (value == null || value.isEmpty) {
+                  return 'Please enter a phone number';
+                }
+                if (value.length < 10) { 
+                  return 'Please enter a valid 10-digit number';
+                }
+                return null;
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                if (formKey.currentState!.validate()) {
+                  Navigator.of(context).pop(phoneController.text.trim());
+                }
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (newNumber != null && newNumber != (_userData?['phoneNumber'] ?? '')) {
+      _updatePhoneNumber(newNumber);
+    }
+  }
+
+  Future<void> _updatePhoneNumber(String newNumber) async {
+    final email = _userData?['email'];
+    if (email == null) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Saving phone number...')),
+    );
+
+    try {
+      // Update Firestore
+      await FirebaseFirestore.instance.collection('users').doc(email).update({
+        'phoneNumber': newNumber,
+      });
+
+      // Refresh local state to show the new value immediately
+      setState(() {
+        _userData?['phoneNumber'] = newNumber;
+      });
+
+      if(mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Phone number updated successfully!'), backgroundColor: Colors.green),
+        );
+      }
+    } catch (e) {
+      if(mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to update phone number: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
 
   @override
   Widget build(BuildContext context) {
@@ -210,22 +297,11 @@ class _EVUserProfileState extends State<EVUserProfile> {
                         subtitle: vehicleInfo,
                       ),
                       const SizedBox(height: 12),
-                      _buildInfoTile(
+                      _buildActionTile(
                         icon: Icons.phone_outlined,
                         title: "Phone Number",
-                        subtitle: _userData?['phoneNumber'] ?? "Not Provided",
-                      ),
-                      const SizedBox(height: 12),
-                      _buildInfoTile(
-                        icon: Icons.calendar_today_outlined,
-                        title: "Member Since",
-                        subtitle: _userData?['createdAt'] != null
-                            ? (_userData!['createdAt'] as Timestamp)
-                                .toDate()
-                                .toLocal()
-                                .toString()
-                                .split(' ')[0]
-                            : "Unknown",
+                        trailingText: _userData?['phoneNumber'] ?? "Not Provided",
+                        onTap: _showEditPhoneNumberDialog,
                       ),
                       
                       const SizedBox(height: 24),

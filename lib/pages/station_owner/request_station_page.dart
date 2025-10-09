@@ -9,11 +9,8 @@ import 'package:geolocator/geolocator.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:cloudinary_public/cloudinary_public.dart';
-// --- 1. IMPORT THE IMAGE CROPPER PACKAGE ---
 import 'package:image_cropper/image_cropper.dart';
 
-
-// ... (The rest of the file top section, including the ChargerSlot class, is unchanged)
 class ChargerSlot {
   String chargerType;
   final TextEditingController powerController;
@@ -21,13 +18,17 @@ class ChargerSlot {
 }
 
 class RequestStationPage extends StatefulWidget {
-  const RequestStationPage({super.key});
+  // If this is provided, the page will be in "Edit Mode"
+  final DocumentSnapshot? stationToEdit;
+
+  const RequestStationPage({super.key, this.stationToEdit});
+  
   @override
   State<RequestStationPage> createState() => _RequestStationPageState();
 }
 
 class _RequestStationPageState extends State<RequestStationPage> {
-  // ... (All other state variables and controllers are unchanged) ...
+  // --- STATE ---
   final _formKey = GlobalKey<FormState>();
   final _stationNameController = TextEditingController();
   final _addressController = TextEditingController();
@@ -52,14 +53,64 @@ class _RequestStationPageState extends State<RequestStationPage> {
   final cloudinary = CloudinaryPublic('dtcsadykn', 'ml_default', cache: false);
   bool _isSubmitting = false;
   bool _isGettingLocation = false;
-
+  late bool _isEditMode;
 
   @override
   void initState() {
     super.initState();
+    _isEditMode = widget.stationToEdit != null;
     _searchController.addListener(_onSearchChanged);
-    _addChargerSlot();
+    
+    if (_isEditMode) {
+      _populateFieldsForEdit();
+    } else {
+      _addChargerSlot(); // Add one default slot for new stations
+    }
   }
+
+  void _populateFieldsForEdit() {
+    final data = widget.stationToEdit!.data() as Map<String, dynamic>;
+
+    _stationNameController.text = data['name'] ?? '';
+    _addressController.text = data['address'] ?? '';
+    if (data['latitude'] != null && data['longitude'] != null) {
+      _selectedLocation = LatLng(data['latitude'], data['longitude']);
+    }
+    _imageUrl = data['imageUrl']; // Existing image
+    
+    // Operating Hours logic
+    final hours = data['operatingHours'] ?? '24x7';
+    const standardHours = ['24x7', '6 AM - 11 PM', '9 AM - 6 PM'];
+    if (standardHours.contains(hours)) {
+      _selectedOperatingHours = hours;
+    } else {
+      _selectedOperatingHours = 'Other (Specify)';
+      _operatingHoursController.text = hours;
+    }
+    
+    _paymentOptions.addAll(List<String>.from(data['paymentOptions'] ?? []));
+    _parkingAvailable = data['parkingAvailable'] ?? false;
+    _restroomAvailable = data['restroomAvailable'] ?? false;
+    _foodNearby = data['foodNearby'] ?? false;
+    _wifiAvailable = data['wifiAvailable'] ?? false;
+    _cctvAvailable = data['cctvAvailable'] ?? false;
+    
+    // Charger Slots
+    final List<dynamic> slotsData = data['slots'] ?? [];
+    if (slotsData.isNotEmpty) {
+      for (var slotMap in slotsData) {
+        _chargerSlots.add(ChargerSlot(
+          chargerType: slotMap['chargerType'] ?? 'Type 2',
+          powerController: TextEditingController(text: (slotMap['powerKw'] ?? '').toString()),
+        ));
+      }
+    } else {
+      _addChargerSlot(); // Add a default if none exist
+    }
+
+    setState(() {}); // Trigger a rebuild with populated data
+  }
+
 
   @override
   void dispose() {
@@ -74,68 +125,40 @@ class _RequestStationPageState extends State<RequestStationPage> {
     super.dispose();
   }
 
-  // --- 2. MODIFY THE _pickAndUploadImage FUNCTION ---
   Future<void> _pickAndUploadImage() async {
-    // Step A: Pick an image from the gallery
-    final XFile? pickedFile = await _picker.pickImage(
-      source: ImageSource.gallery,
-      imageQuality: 90, // Slightly compress before cropping
-    );
+    final XFile? pickedFile = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 90);
+    if (pickedFile == null) return;
 
-    if (pickedFile == null) return; // User canceled the picker
-
-    // Step B: Crop the picked image
     final CroppedFile? croppedFile = await ImageCropper().cropImage(
       sourcePath: pickedFile.path,
-      // Enforce a 16:9 aspect ratio for a widescreen look
       aspectRatio: const CropAspectRatio(ratioX: 16, ratioY: 9),
-      // Set a maximum width to control the final resolution
-      maxWidth: 1200, 
+      maxWidth: 1200,
       uiSettings: [
-        AndroidUiSettings(
-            toolbarTitle: 'Crop Station Photo',
-            toolbarColor: Colors.blueAccent,
-            toolbarWidgetColor: Colors.white,
-            initAspectRatio: CropAspectRatioPreset.ratio16x9,
-            lockAspectRatio: true), // User cannot change the aspect ratio
-        IOSUiSettings(
-          title: 'Crop Station Photo',
-          aspectRatioLockEnabled: true,
-          aspectRatioPickerButtonHidden: true,
-          resetAspectRatioEnabled: false,
-        ),
+        AndroidUiSettings(toolbarTitle: 'Crop Station Photo', toolbarColor: Colors.blueAccent, toolbarWidgetColor: Colors.white, initAspectRatio: CropAspectRatioPreset.ratio16x9, lockAspectRatio: true),
+        IOSUiSettings(title: 'Crop Station Photo', aspectRatioLockEnabled: true, aspectRatioPickerButtonHidden: true, resetAspectRatioEnabled: false),
       ],
     );
 
-    if (croppedFile == null) return; // User canceled the cropper
-
-    // Step C: Upload the cropped image
+    if (croppedFile == null) return;
     setState(() {
-      _imageFile = File(croppedFile.path); // Show the cropped image preview
+      _imageFile = File(croppedFile.path);
       _isUploadingImage = true;
-      _imageUrl = null; // Reset previous URL if changing photo
+      _imageUrl = null;
     });
 
     try {
-      CloudinaryResponse response = await cloudinary.uploadFile(
-        CloudinaryFile.fromFile(croppedFile.path, resourceType: CloudinaryResourceType.Image),
-      );
+      CloudinaryResponse response = await cloudinary.uploadFile(CloudinaryFile.fromFile(croppedFile.path, resourceType: CloudinaryResourceType.Image));
       setState(() {
         _imageUrl = response.secureUrl;
         _isUploadingImage = false;
       });
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Image uploaded successfully!'), backgroundColor: Colors.green));
-      }
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Image uploaded successfully!'), backgroundColor: Colors.green));
     } on CloudinaryException catch (e) {
       setState(() => _isUploadingImage = false);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Image upload failed: ${e.message}'), backgroundColor: Colors.red));
-      }
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Image upload failed: ${e.message}'), backgroundColor: Colors.red));
     }
   }
 
-  // ... (All other functions like _submitRequest, _getCurrentLocationAndMoveMap, etc., remain unchanged) ...
   void _addChargerSlot() {
     setState(() {
       _chargerSlots.add(ChargerSlot(powerController: TextEditingController()));
@@ -149,9 +172,14 @@ class _RequestStationPageState extends State<RequestStationPage> {
     });
   }
 
-  Future<void> _submitRequest() async {
-    if (_selectedLocation == null || _imageUrl == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please select a location and upload a photo.'), backgroundColor: Colors.red));
+  // --- COMBINED SUBMIT FUNCTION ---
+  Future<void> _submitForm() async {
+    if (_selectedLocation == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please select a location on the map.'), backgroundColor: Colors.red));
+      return;
+    }
+    if (_imageUrl == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please upload a photo.'), backgroundColor: Colors.red));
       return;
     }
     if (_chargerSlots.isEmpty) {
@@ -160,52 +188,96 @@ class _RequestStationPageState extends State<RequestStationPage> {
     }
 
     if (_formKey.currentState!.validate()) {
-      setState(() => _isSubmitting = true);
-      
-      try {
-        final prefs = await SharedPreferences.getInstance();
-        final ownerEmail = prefs.getString('email');
-        if (ownerEmail == null) throw Exception("User not logged in");
-
-        final List<Map<String, dynamic>> slotsData = _chargerSlots.map((slot) {
-          return {
-            'chargerType': slot.chargerType,
-            'powerKw': double.tryParse(slot.powerController.text) ?? 0,
-            'isAvailable': true,
-          };
-        }).toList();
-
-        await FirebaseFirestore.instance.collection('station_requests').add({
-          'stationName': _stationNameController.text.trim(),
-          'address': _addressController.text.trim(),
-          'latitude': _selectedLocation!.latitude,
-          'longitude': _selectedLocation!.longitude,
-          'ownerEmail': ownerEmail,
-          'status': 'pending',
-          'requestedAt': FieldValue.serverTimestamp(),
-          'imageUrl': _imageUrl,
-          'operatingHours': _selectedOperatingHours == 'Other (Specify)' ? _operatingHoursController.text.trim() : _selectedOperatingHours,
-          'paymentOptions': _paymentOptions.toList(),
-          'parkingAvailable': _parkingAvailable,
-          'restroomAvailable': _restroomAvailable,
-          'foodNearby': _foodNearby,
-          'wifiAvailable': _wifiAvailable,
-          'cctvAvailable': _cctvAvailable,
-          'slots': slotsData, 
-        });
-  
-        if (mounted) {
-          Navigator.of(context).pop();
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Station request submitted successfully!'), backgroundColor: Colors.green));
-        }
-      } catch (e) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to submit request: $e'), backgroundColor: Colors.red));
-      } finally {
-        if (mounted) setState(() => _isSubmitting = false);
+      if (_isEditMode) {
+        await _updateStation();
+      } else {
+        await _createRequest();
       }
     }
   }
+
+  // --- LOGIC FOR UPDATING AN EXISTING STATION ---
+  Future<void> _updateStation() async {
+    setState(() => _isSubmitting = true);
+    
+    final List<Map<String, dynamic>> slotsData = _chargerSlots.map((slot) {
+      return {'chargerType': slot.chargerType, 'powerKw': double.tryParse(slot.powerController.text) ?? 0, 'isAvailable': true};
+    }).toList();
+
+    try {
+      await widget.stationToEdit!.reference.update({
+        'name': _stationNameController.text.trim(),
+        'address': _addressController.text.trim(),
+        'latitude': _selectedLocation!.latitude,
+        'longitude': _selectedLocation!.longitude,
+        'imageUrl': _imageUrl,
+        'operatingHours': _selectedOperatingHours == 'Other (Specify)' ? _operatingHoursController.text.trim() : _selectedOperatingHours,
+        'paymentOptions': _paymentOptions.toList(),
+        'parkingAvailable': _parkingAvailable,
+        'restroomAvailable': _restroomAvailable,
+        'foodNearby': _foodNearby,
+        'wifiAvailable': _wifiAvailable,
+        'cctvAvailable': _cctvAvailable,
+        'slots': slotsData,
+        'totalSlots': slotsData.length,
+        // Note: availableSlots might need more complex logic if some are in use
+      });
+
+      if (mounted) {
+        Navigator.of(context).pop();
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Station updated successfully!'), backgroundColor: Colors.green));
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to update station: $e'), backgroundColor: Colors.red));
+    } finally {
+      if (mounted) setState(() => _isSubmitting = false);
+    }
+  }
+
+  // --- LOGIC FOR CREATING A NEW STATION REQUEST ---
+  Future<void> _createRequest() async {
+    setState(() => _isSubmitting = true);
+      
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final ownerEmail = prefs.getString('email');
+      if (ownerEmail == null) throw Exception("User not logged in");
+
+      final List<Map<String, dynamic>> slotsData = _chargerSlots.map((slot) {
+        return {'chargerType': slot.chargerType, 'powerKw': double.tryParse(slot.powerController.text) ?? 0, 'isAvailable': true};
+      }).toList();
+
+      await FirebaseFirestore.instance.collection('station_requests').add({
+        'stationName': _stationNameController.text.trim(),
+        'address': _addressController.text.trim(),
+        'latitude': _selectedLocation!.latitude,
+        'longitude': _selectedLocation!.longitude,
+        'ownerEmail': ownerEmail,
+        'status': 'pending',
+        'requestedAt': FieldValue.serverTimestamp(),
+        'imageUrl': _imageUrl,
+        'operatingHours': _selectedOperatingHours == 'Other (Specify)' ? _operatingHoursController.text.trim() : _selectedOperatingHours,
+        'paymentOptions': _paymentOptions.toList(),
+        'parkingAvailable': _parkingAvailable,
+        'restroomAvailable': _restroomAvailable,
+        'foodNearby': _foodNearby,
+        'wifiAvailable': _wifiAvailable,
+        'cctvAvailable': _cctvAvailable,
+        'slots': slotsData, 
+      });
+
+      if (mounted) {
+        Navigator.of(context).pop();
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Station request submitted successfully!'), backgroundColor: Colors.green));
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to submit request: $e'), backgroundColor: Colors.red));
+    } finally {
+      if (mounted) setState(() => _isSubmitting = false);
+    }
+  }
   
+  // All other helper methods (_getCurrentLocationAndMoveMap, _searchAndMoveMap, etc.) remain unchanged...
   Future<void> _getCurrentLocationAndMoveMap() async {
     setState(() => _isGettingLocation = true);
     try {
@@ -287,7 +359,6 @@ class _RequestStationPageState extends State<RequestStationPage> {
     _updateAddressFromLocation(tappedPoint);
   }
   
-
   Widget _buildSectionHeader(String title) => Padding(padding: const EdgeInsets.only(top: 24.0, bottom: 16.0), child: Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.black87)));
 
   Widget _buildMultiSelectChip(String title, Set<String> selectedSet, List<String> options) {
@@ -312,12 +383,13 @@ class _RequestStationPageState extends State<RequestStationPage> {
     );
   }
 
-
   @override
   Widget build(BuildContext context) {
-    // The build method is largely unchanged, just ensure it uses the _imageFile state variable
+    // --- DYNAMIC UI ---
     return Scaffold(
-      appBar: AppBar(title: const Text('Request New Station'), backgroundColor: Colors.blueAccent, foregroundColor: Colors.white),
+      appBar: AppBar(
+        title: Text(_isEditMode ? 'Edit Station' : 'Request New Station'),
+        backgroundColor: Colors.blueAccent, foregroundColor: Colors.white),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16.0),
         child: Form(
@@ -336,7 +408,7 @@ class _RequestStationPageState extends State<RequestStationPage> {
                     borderRadius: BorderRadius.circular(12),
                     child: FlutterMap(
                       mapController: _mapController,
-                      options: MapOptions(initialCenter: _initialCenter, initialZoom: 14.0, onTap: (tapPosition, point) => _handleMapTap(point)),
+                      options: MapOptions(initialCenter: _selectedLocation ?? _initialCenter, initialZoom: _isEditMode ? 15.0 : 14.0, onTap: (tapPosition, point) => _handleMapTap(point)),
                       children: [
                         TileLayer(urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png'),
                         if (_selectedLocation != null) MarkerLayer(markers: [Marker(width: 80.0, height: 80.0, point: _selectedLocation!, child: const Icon(Icons.location_on, color: Colors.red, size: 45))]),
@@ -354,9 +426,17 @@ class _RequestStationPageState extends State<RequestStationPage> {
                 ]),
               ),
               const SizedBox(height: 16),
-              Container(height: 150, width: double.infinity, decoration: BoxDecoration(border: Border.all(color: Colors.grey.shade400), borderRadius: BorderRadius.circular(12)), child: _imageFile != null ? ClipRRect(borderRadius: BorderRadius.circular(11), child: Image.file(_imageFile!, fit: BoxFit.cover)) : const Center(child: Text('No image selected.'))),
+              Container(
+                height: 150, width: double.infinity, 
+                decoration: BoxDecoration(border: Border.all(color: Colors.grey.shade400), borderRadius: BorderRadius.circular(12)), 
+                child: _imageFile != null 
+                  ? ClipRRect(borderRadius: BorderRadius.circular(11), child: Image.file(_imageFile!, fit: BoxFit.cover)) 
+                  : (_imageUrl != null 
+                      ? ClipRRect(borderRadius: BorderRadius.circular(11), child: Image.network(_imageUrl!, fit: BoxFit.cover))
+                      : const Center(child: Text('No image selected.')))
+              ),
               const SizedBox(height: 8),
-              Center(child: _isUploadingImage ? const CircularProgressIndicator() : ElevatedButton.icon(onPressed: _pickAndUploadImage, icon: const Icon(Icons.camera_alt), label: Text(_imageFile == null ? 'Select Photo' : 'Change Photo'))),
+              Center(child: _isUploadingImage ? const CircularProgressIndicator() : ElevatedButton.icon(onPressed: _pickAndUploadImage, icon: const Icon(Icons.camera_alt), label: Text(_imageFile == null && _imageUrl == null ? 'Select Photo' : 'Change Photo'))),
               _buildSectionHeader('2. Basic Information'),
               TextFormField(controller: _stationNameController, decoration: const InputDecoration(labelText: 'Station Name', border: OutlineInputBorder()), validator: (v) => v!.isEmpty ? 'This field is required' : null),
               const SizedBox(height: 16),
@@ -430,7 +510,7 @@ class _RequestStationPageState extends State<RequestStationPage> {
               SwitchListTile(title: const Text('WiFi Available'), value: _wifiAvailable, onChanged: (val) => setState(() => _wifiAvailable = val)),
               SwitchListTile(title: const Text('CCTV Security'), value: _cctvAvailable, onChanged: (val) => setState(() => _cctvAvailable = val)),
               const SizedBox(height: 24),
-              SizedBox(width: double.infinity, child: ElevatedButton(onPressed: _isSubmitting ? null : _submitRequest, style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16), backgroundColor: Colors.blueAccent, foregroundColor: Colors.white), child: _isSubmitting ? const CircularProgressIndicator(color: Colors.white) : const Text('Submit Request', style: TextStyle(fontSize: 16)))),
+              SizedBox(width: double.infinity, child: ElevatedButton(onPressed: _isSubmitting ? null : _submitForm, style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16), backgroundColor: Colors.blueAccent, foregroundColor: Colors.white), child: _isSubmitting ? const CircularProgressIndicator(color: Colors.white) : Text(_isEditMode ? 'Update Station' : 'Submit Request', style: TextStyle(fontSize: 16)))),
             ],
           ),
         ),

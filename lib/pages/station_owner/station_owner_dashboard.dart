@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import '../../routes/app_routes.dart'; // We now use named routes
-
-// We no longer need to import request_station_page.dart here
+import 'package:shared_preferences/shared_preferences.dart';
+import '../../routes/app_routes.dart';
+import 'manage_stations_page.dart';
+import 'station_owner_profile_page.dart';
+import 'reports_page.dart';
+import 'request_station_page.dart';
+import 'view_issues_page.dart'; // <-- 1. IMPORT THE NEW ISSUES PAGE
 
 class StationOwnerDashboard extends StatefulWidget {
   final String role;
@@ -15,6 +19,139 @@ class StationOwnerDashboard extends StatefulWidget {
 
 class _StationOwnerDashboardState extends State<StationOwnerDashboard> {
   int _selectedIndex = 0;
+  bool _isLoadingProfile = true;
+  String _ownerName = '';
+  late final List<Widget> _pages;
+
+  @override
+  void initState() {
+    super.initState();
+    _pages = [
+      _DashboardHomeView(email: widget.email),
+      const ManageStationsPage(),
+      const ReportsPage(),
+      StationOwnerProfilePage(email: widget.email),
+    ];
+    _initializeAndCheckProfile();
+  }
+
+  Future<void> _initializeAndCheckProfile() async {
+    try {
+      final userDoc = await FirebaseFirestore.instance.collection('users').doc(widget.email).get();
+
+      if (!mounted) return;
+
+      final data = userDoc.data();
+      if (!userDoc.exists || data == null || !(data['setupComplete'] ?? false)) {
+        Navigator.pushReplacementNamed(
+          context,
+          AppRoutes.stationOwnerSetup,
+          arguments: {'email': widget.email},
+        );
+        return;
+      }
+
+      if (mounted) {
+        setState(() {
+          _ownerName = data['fullName'] ?? 'Dashboard';
+        });
+      }
+
+      setState(() => _isLoadingProfile = false);
+    } catch (e) {
+      print("Error checking profile: $e");
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error loading profile: $e'), backgroundColor: Colors.red),
+        );
+        setState(() => _isLoadingProfile = false);
+      }
+    }
+  }
+
+  void _onItemTapped(int index) {
+    setState(() {
+      _selectedIndex = index;
+    });
+  }
+
+  String _getAppBarTitle() {
+    switch (_selectedIndex) {
+      case 0:
+        return _ownerName.isNotEmpty ? _ownerName.toUpperCase() : 'DASHBOARD';
+      case 1:
+        return 'MANAGE STATIONS';
+      case 2:
+        return 'REPORTS';
+      default:
+        return 'DASHBOARD';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.grey.shade50,
+      appBar: _selectedIndex == 3
+          ? null
+          : AppBar(
+              automaticallyImplyLeading: false,
+              backgroundColor: Colors.grey.shade50,
+              elevation: 0,
+              centerTitle: false,
+              title: Text(
+                _getAppBarTitle(),
+                style: const TextStyle(
+                  color: Colors.black,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 28,
+                ),
+              ),
+            ),
+      body: _isLoadingProfile
+          ? const Center(child: CircularProgressIndicator())
+          : IndexedStack(
+              index: _selectedIndex,
+              children: _pages,
+            ),
+      floatingActionButton: _selectedIndex == 1
+          ? FloatingActionButton.extended(
+              onPressed: () {
+                Navigator.push(context, MaterialPageRoute(builder: (_) => const RequestStationPage()));
+              },
+              icon: const Icon(Icons.add),
+              label: const Text('New Station'),
+              backgroundColor: Colors.blueAccent,
+            )
+          : null,
+      bottomNavigationBar: BottomNavigationBar(
+        currentIndex: _selectedIndex,
+        onTap: _onItemTapped,
+        selectedItemColor: Colors.blueAccent,
+        unselectedItemColor: Colors.grey,
+        backgroundColor: Colors.white,
+        type: BottomNavigationBarType.fixed,
+        items: const [
+          BottomNavigationBarItem(icon: Icon(Icons.home_filled), label: 'Home'),
+          BottomNavigationBarItem(icon: Icon(Icons.ev_station_rounded), label: 'Stations'),
+          BottomNavigationBarItem(icon: Icon(Icons.history_rounded), label: 'Reports'),
+          BottomNavigationBarItem(icon: Icon(Icons.person_rounded), label: 'Profile'),
+        ],
+      ),
+    );
+  }
+}
+
+// --- WIDGET FOR THE HOME TAB CONTENT (MODIFIED) ---
+class _DashboardHomeView extends StatefulWidget {
+  final String email;
+  const _DashboardHomeView({required this.email});
+
+  @override
+  State<_DashboardHomeView> createState() => _DashboardHomeViewState();
+}
+
+class _DashboardHomeViewState extends State<_DashboardHomeView> {
   int _totalStations = 0;
   int _totalChargers = 0;
   double _totalRevenue = 0.0;
@@ -28,24 +165,19 @@ class _StationOwnerDashboardState extends State<StationOwnerDashboard> {
   }
 
   Future<void> _fetchDashboardData() async {
-    // This logic remains the same
     try {
-      final stationsQuery = await FirebaseFirestore.instance
-          .collection('stations')
-          .where('ownerEmail', isEqualTo: widget.email) // Filter by the current owner's email
-          .get();
-      final issuesQuery = await FirebaseFirestore.instance
-          .collection('issues')
-          .get();
+      final stationsQuery =
+          await FirebaseFirestore.instance.collection('stations').where('ownerEmail', isEqualTo: widget.email).get();
+      // This will be zero for now, but is ready for a real 'issues' collection.
+      final issuesQuery = await FirebaseFirestore.instance.collection('issues').where('ownerEmail', isEqualTo: widget.email).get();
 
       int totalChargersCount = 0;
       double totalRevenueAmount = 0.0;
 
       for (var doc in stationsQuery.docs) {
         final data = doc.data();
-        totalChargersCount += (data['chargerCount'] ?? 0) is int
-            ? (data['chargerCount'] ?? 0) as int
-            : ((data['chargerCount'] ?? 0) as num).toInt();
+        totalChargersCount +=
+            (data['totalSlots'] ?? 0) is int ? (data['totalSlots'] ?? 0) as int : ((data['totalSlots'] ?? 0) as num).toInt();
         totalRevenueAmount += (data['totalRevenue'] ?? 0.0) as double;
       }
 
@@ -62,10 +194,6 @@ class _StationOwnerDashboardState extends State<StationOwnerDashboard> {
       if (mounted) setState(() => _isLoading = false);
       print("Error fetching dashboard data: $e");
     }
-  }
-
-  void _onItemTapped(int index) {
-    setState(() => _selectedIndex = index);
   }
 
   Widget _buildSummaryCard(IconData icon, String title, String value) {
@@ -88,18 +216,11 @@ class _StationOwnerDashboardState extends State<StationOwnerDashboard> {
         children: [
           Icon(icon, color: Colors.blueAccent, size: 30),
           const SizedBox(height: 12),
-          Text(
-            title,
-            style: const TextStyle(fontSize: 14, color: Colors.black54),
-          ),
+          Text(title, style: const TextStyle(fontSize: 14, color: Colors.black54)),
           const SizedBox(height: 4),
           Text(
             value,
-            style: const TextStyle(
-              fontSize: 24,
-              fontWeight: FontWeight.bold,
-              color: Colors.black,
-            ),
+            style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.black),
           ),
         ],
       ),
@@ -124,143 +245,58 @@ class _StationOwnerDashboardState extends State<StationOwnerDashboard> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.grey.shade50,
-      appBar: AppBar(
-        backgroundColor: Colors.grey.shade50,
-        elevation: 0,
-        centerTitle: false,
-        title: const Text(
-          'STATION',
-          style: TextStyle(
-            color: Colors.black,
-            fontWeight: FontWeight.bold,
-            fontSize: 28,
-          ),
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.logout_rounded, color: Colors.black),
-            onPressed: () {
-              // TODO: Add proper logout logic (clear prefs, etc.)
-              Navigator.pushReplacementNamed(context, AppRoutes.landing);
-            },
-            tooltip: 'Logout',
-          ),
-        ],
-      ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-        child: _isLoading
-            ? const Center(child: CircularProgressIndicator())
-            : Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  GridView.count(
-                    crossAxisCount: 2,
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    crossAxisSpacing: 16,
-                    mainAxisSpacing: 16,
-                    childAspectRatio: 1.2,
-                    children: [
-                      _buildSummaryCard(
-                        Icons.ev_station_rounded,
-                        'Total Stations',
-                        _totalStations.toString(),
-                      ),
-                      _buildSummaryCard(
-                        Icons.charging_station_rounded,
-                        'Total Chargers',
-                        _totalChargers.toString(),
-                      ),
-                      _buildSummaryCard(
-                        Icons.payments_rounded,
-                        'Total Revenue',
-                        '\$${_totalRevenue.toStringAsFixed(2)}',
-                      ),
-                      _buildSummaryCard(
-                        Icons.warning_rounded,
-                        'Issues Reported',
-                        _issuesReported.toString(),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 32),
-                  const Text(
-                    'Quick Actions',
-                    style: TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.black,
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  // --- 4. USE THE NAMED ROUTE ---
-                  _buildActionButton(
-                    Icons.add_circle_outline,
-                    'Request New Station',
-                    () {
-                      Navigator.pushNamed(context, AppRoutes.requestStation);
-                    },
-                  ),
-                  _buildActionButton(
-                    Icons.business_rounded,
-                    'Manage Stations',
-                    () {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Navigating to manage stations'),
-                        ),
-                      );
-                    },
-                  ),
-                  _buildActionButton(
-                    Icons.bar_chart_rounded,
-                    'View Status Reports',
-                    () {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Viewing status reports')),
-                      );
-                    },
-                  ),
-                  _buildActionButton(
-                    Icons.bug_report_rounded,
-                    'View Issues',
-                    () {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Viewing reported issues'),
-                        ),
-                      );
-                    },
-                  ),
-                ],
-              ),
-      ),
-      bottomNavigationBar: BottomNavigationBar(
-        currentIndex: _selectedIndex,
-        onTap: _onItemTapped,
-        selectedItemColor: Colors.blueAccent,
-        unselectedItemColor: Colors.grey,
-        backgroundColor: Colors.white,
-        type: BottomNavigationBarType.fixed,
-        items: const [
-          BottomNavigationBarItem(icon: Icon(Icons.home_filled), label: 'Home'),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.ev_station_rounded),
-            label: 'Stations',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.history_rounded),
-            label: 'Reports',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.person_rounded),
-            label: 'Profile',
-          ),
-        ],
-      ),
-    );
+    return _isLoading
+        ? const Center(child: CircularProgressIndicator())
+        : SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                GridView.count(
+                  crossAxisCount: 2,
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  crossAxisSpacing: 16,
+                  mainAxisSpacing: 16,
+                  childAspectRatio: 1.2,
+                  children: [
+                    _buildSummaryCard(Icons.ev_station_rounded, 'Total Stations', _totalStations.toString()),
+                    _buildSummaryCard(Icons.charging_station_rounded, 'Total Chargers', _totalChargers.toString()),
+                    _buildSummaryCard(Icons.payments_rounded, 'Total Revenue', '\$${_totalRevenue.toStringAsFixed(2)}'),
+                    _buildSummaryCard(Icons.warning_rounded, 'Issues Reported', _issuesReported.toString()),
+                  ],
+                ),
+                const SizedBox(height: 32),
+                const Text(
+                  'Quick Actions',
+                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.black),
+                ),
+                const SizedBox(height: 16),
+                _buildActionButton(
+                  Icons.add_circle_outline,
+                  'Request New Station',
+                  () => Navigator.push(context, MaterialPageRoute(builder: (_) => const RequestStationPage())),
+                ),
+                _buildActionButton(
+                  Icons.business_rounded,
+                  'Manage Stations',
+                  // This will switch to the 'Stations' tab in the bottom nav bar
+                  () => DefaultTabController.of(context)?.animateTo(1),
+                ),
+                _buildActionButton(
+                  Icons.bar_chart_rounded,
+                  'View Status Reports',
+                  // --- 3. NAVIGATE TO THE NEW REPORTS PAGE ---
+                  () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ReportsPage())),
+                ),
+                _buildActionButton(
+                  Icons.bug_report_rounded,
+                  'View Issues',
+                  // --- 4. NAVIGATE TO THE NEW ISSUES PAGE ---
+                  () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ViewIssuesPage())),
+                ),
+              ],
+            ),
+          );
   }
 }

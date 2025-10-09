@@ -1,8 +1,11 @@
+// lib/pages/admin/owner_stations_page.dart
+
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'edit_station_page.dart';
+import '../station_owner/request_station_page.dart'; // <-- 1. CHANGE IMPORT
 
 class OwnerStationsPage extends StatelessWidget {
+  // ... (constructor)
   final String ownerEmail;
   final String ownerName;
 
@@ -12,6 +15,8 @@ class OwnerStationsPage extends StatelessWidget {
     required this.ownerName,
   });
 
+
+  // ... (other methods)
   Widget _buildStationDetailRow(IconData icon, String title, String value) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4.0),
@@ -50,8 +55,10 @@ class OwnerStationsPage extends StatelessWidget {
     }
   }
 
+
   @override
   Widget build(BuildContext context) {
+    // ... (unchanged Scaffold and StreamBuilder)
     return Scaffold(
       appBar: AppBar(title: Text("$ownerName's Stations"), backgroundColor: Colors.deepPurple.shade400, foregroundColor: Colors.white),
       body: StreamBuilder<QuerySnapshot>(
@@ -120,7 +127,8 @@ class OwnerStationsPage extends StatelessWidget {
                                 label: const Text('Edit'),
                                 style: TextButton.styleFrom(foregroundColor: Colors.blue.shade700),
                                 onPressed: () {
-                                  Navigator.push(context, MaterialPageRoute(builder: (context) => EditStationPage(stationRef: stationDoc.reference)));
+                                  // --- 2. UPDATE NAVIGATION LOGIC ---
+                                  Navigator.push(context, MaterialPageRoute(builder: (context) => RequestStationPage(stationToEdit: stationDoc)));
                                 },
                               ),
                               const SizedBox(width: 8),

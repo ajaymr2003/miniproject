@@ -43,6 +43,7 @@ class _StationRequestsPageState extends State<StationRequestsPage> {
       'slots': requestData['slots'], 
       'totalSlots': totalSlots,
       'availableSlots': availableSlots,
+      'isActive': true, // <-- THIS LINE IS NOW CORRECTLY ADDED
     });
 
     // Update the request's status to 'approved'

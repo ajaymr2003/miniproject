@@ -211,11 +211,9 @@ class _HomePageState extends State<HomePage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // --- MODIFIED USAGE OF THE WARNING WIDGET ---
               if (isLowBattery && _showLowBatteryWarning) ...[
                 _buildLowBatteryWarning(
                   batteryLevel: batteryLevel.toDouble(),
-                  // Pass the function to be called when the button is pressed
                   onFindStations: () {
                     _findBestStation(batteryLevel.toDouble());
                   },
@@ -328,7 +326,6 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // --- THIS IS THE NEW, INTERACTIVE WARNING WIDGET ---
   Widget _buildLowBatteryWarning(
       {required double batteryLevel,
       required VoidCallback onFindStations,
@@ -403,7 +400,6 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // (The rest of the helper widgets are unchanged)
   Widget _buildActionButton(
       {required IconData icon,
       required String label,
@@ -539,10 +535,6 @@ class _HomePageState extends State<HomePage> {
   }
 }
 
-// =========================================================================
-// The rest of this file (EVUserDashboard and its helper pages) is UNCHANGED
-// =========================================================================
-
 class HistoryPage extends StatelessWidget {
   const HistoryPage({super.key});
   @override
@@ -550,23 +542,6 @@ class HistoryPage extends StatelessWidget {
     return const Center(
         child: Text('History Page - Coming Soon!',
             style: TextStyle(fontSize: 24)));
-  }
-}
-
-class MapPlaceholderPage extends StatelessWidget {
-  const MapPlaceholderPage({super.key});
-  @override
-  Widget build(BuildContext context) {
-    return const Center(
-      child: Padding(
-        padding: EdgeInsets.all(24.0),
-        child: Text(
-          'The live map now opens in a full screen. Tap the "Map" icon again to open it.',
-          textAlign: TextAlign.center,
-          style: TextStyle(fontSize: 16, color: Colors.grey),
-        ),
-      ),
-    );
   }
 }
 
@@ -591,24 +566,47 @@ class _EVUserDashboardState extends State<EVUserDashboard> {
   String? _email;
   bool _isLoading = true;
   bool _setupDialogOpen = false;
-  // This is no longer needed here, moved into HomePageState
-  // bool _shouldTriggerAi = false;
-
-  // We need to pass the email down to HomePage
-  List<Widget> get _pages => [
-        HomePage(email: _email!),
-        const MapPlaceholderPage(),
-        const HistoryPage(),
-        const EVUserProfile(),
-      ];
+  late final List<Widget> _pages;
 
   @override
   void initState() {
     super.initState();
-    // The trigger logic is now handled inside HomePage where it has access to the data stream
     _initializeAndCheckProfile();
   }
 
+  // --- NEW FUNCTION ---
+  /// Ensures the Realtime Database node for the vehicle exists.
+  /// This is a fallback for older user accounts that might have missed setup.
+  Future<void> _ensureRtdbVehicleNodeExists(String email) async {
+    try {
+      final encodedEmail = email.replaceAll('.', ',');
+      final ref = FirebaseDatabase.instance.ref('vehicles/$encodedEmail');
+      final snapshot = await ref.get();
+
+      if (!snapshot.exists) {
+        print("⚠️ RTDB node missing for $email. Creating it now...");
+        // Fetch user details from Firestore to populate the node
+        final userDoc = await FirebaseFirestore.instance.collection('users').doc(email).get();
+        final userData = userDoc.data() ?? {};
+
+        await ref.set({
+          'email': email,
+          'brand': userData['brand'] ?? '',
+          'variant': userData['variant'] ?? '',
+          'isRunning': false,
+          'batteryLevel': 100,
+          'aiRecommendationThreshold': userData['aiRecommendationThreshold'] ?? 30.0,
+          'latitude': null, // Initialize with null location
+          'longitude': null,
+        });
+        print("✅ Created missing RTDB node for $email.");
+      }
+    } catch (e) {
+      print("❌ Failed to ensure RTDB node exists: $e");
+    }
+  }
+
+  // --- MODIFIED ---
   Future<void> _initializeAndCheckProfile() async {
     String emailToUse = widget.email;
     if (emailToUse.isEmpty) {
@@ -619,7 +617,18 @@ class _EVUserDashboardState extends State<EVUserDashboard> {
       if (mounted) setState(() => _isLoading = false);
       return;
     }
-    if (mounted) setState(() => _email = emailToUse);
+
+    _email = emailToUse;
+    _pages = [
+      HomePage(email: _email!),
+      LiveMapPage(email: _email!, isEmbedded: true),
+      const HistoryPage(),
+      const EVUserProfile(),
+    ];
+
+    // --- ADDED THE CHECK HERE ---
+    await _ensureRtdbVehicleNodeExists(emailToUse);
+
     try {
       final doc = await FirebaseFirestore.instance
           .collection('users')
@@ -639,10 +648,7 @@ class _EVUserDashboardState extends State<EVUserDashboard> {
     }
     if (mounted) {
       setState(() => _isLoading = false);
-      // If triggered by a notification, call the AI function
       if (widget.triggerAiRecommendation) {
-        // This is a bit tricky, we need to access HomePage's state.
-        // A better approach is to pass the trigger down. For now, let's keep it simple.
         // The logic has been moved inside HomePage's StreamBuilder for reliability.
       }
     }
@@ -667,21 +673,11 @@ class _EVUserDashboardState extends State<EVUserDashboard> {
   }
 
   void _onItemTapped(int index) {
-    if (index == 1) {
-      if (_email != null) {
-        Navigator.push(
-          context,
-          MaterialPageRoute(builder: (context) => LiveMapPage(email: _email!)),
-        );
-      }
-    } else {
-      setState(() {
-        _selectedIndex = index;
-      });
-    }
+    setState(() {
+      _selectedIndex = index;
+    });
   }
 
-  // --- NEW: AppBar is now built in a separate method ---
   AppBar _buildAppBar(BuildContext context) {
     return AppBar(
       automaticallyImplyLeading: false,
@@ -690,7 +686,6 @@ class _EVUserDashboardState extends State<EVUserDashboard> {
       actions: [
         IconButton(
           onPressed: () {
-            // This push navigation should now work correctly.
             Navigator.push(
               context,
               MaterialPageRoute(

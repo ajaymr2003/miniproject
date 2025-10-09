@@ -9,6 +9,8 @@ import '../pages/forgot_password_page.dart';
 import '../pages/evuser/evuser_dashboard.dart';
 import '../pages/admin/station_requests_page.dart'; 
 import '../pages/station_owner/request_station_page.dart'; 
+import '../pages/station_owner/station_owner_setup.dart';
+import '../pages/station_owner/manage_stations_page.dart'; // <-- 1. IMPORT THE NEW PAGE
 
 class AppRoutes {
   // --- CHANGE: The app now starts at the splash screen ---
@@ -24,6 +26,8 @@ class AppRoutes {
   static const String stationOwnerDashboard = '/station_owner_dashboard';
   static const String stationRequests = '/station_requests'; 
   static const String requestStation = '/request_station';
+  static const String stationOwnerSetup = '/station_owner_setup';
+  static const String manageStations = '/manage_stations'; // <-- 2. ADD THE NEW ROUTE CONSTANT
 
   static Route<dynamic> generateRoute(RouteSettings settings) {
     switch (settings.name) {
@@ -45,6 +49,20 @@ class AppRoutes {
 
       case requestStation:
         return MaterialPageRoute(builder: (_) => const RequestStationPage());
+
+      case stationOwnerSetup:
+        final args = settings.arguments;
+        String email = '';
+        if (args is Map<String, dynamic>) {
+          email = args['email'] ?? '';
+        } else if (args is String) {
+          email = args;
+        }
+        return MaterialPageRoute(builder: (_) => StationOwnerSetupPage(email: email));
+
+      // <-- 3. ADD A CASE FOR THE NEW ROUTE ---
+      case manageStations:
+        return MaterialPageRoute(builder: (_) => const ManageStationsPage());
 
       case evuserDashboard:
         final args = settings.arguments;

@@ -8,15 +8,19 @@ import 'package:latlong2/latlong.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:http/http.dart' as http;
+import 'package:geolocator/geolocator.dart';
+import '../../routes/app_routes.dart';
 
 class LiveMapPage extends StatefulWidget {
   final String email;
-  final LatLng? destination; // Destination is optional for navigation mode
+  final LatLng? destination;
+  final bool isEmbedded;
 
   const LiveMapPage({
     super.key,
     required this.email,
     this.destination,
+    this.isEmbedded = false,
   });
 
   @override
@@ -27,24 +31,21 @@ class _LiveMapPageState extends State<LiveMapPage> {
   final MapController _mapController = MapController();
   final List<Marker> _stationMarkers = [];
   StreamSubscription? _vehicleSubscription;
-  // --- NEW: Subscription for navigation status ---
   StreamSubscription? _navigationStatusSubscription;
   Marker? _userCarMarker;
   Polyline? _routePolyline;
   bool _isLoadingRoute = false;
-  // --- NEW: Track if the map has been centered on the car yet ---
   bool _hasCenteredOnCar = false;
-
-  // --- NEW: State for navigation control ---
   bool _isNavigating = false;
   bool _isUpdatingNavigation = false;
+  bool _hasFittedBounds = false;
+  bool _hasShownReachedPopup = false;
 
   @override
   void initState() {
     super.initState();
     _fetchStations();
     _subscribeToVehicleLocation();
-    // --- NEW: Subscribe to navigation status if in navigation mode ---
     if (widget.destination != null) {
       _subscribeToNavigationStatus();
     }
@@ -53,7 +54,6 @@ class _LiveMapPageState extends State<LiveMapPage> {
   @override
   void dispose() {
     _vehicleSubscription?.cancel();
-    // --- NEW: Cancel navigation subscription ---
     _navigationStatusSubscription?.cancel();
     super.dispose();
   }
@@ -62,7 +62,48 @@ class _LiveMapPageState extends State<LiveMapPage> {
     return email.replaceAll('.', ',');
   }
 
-  // --- NEW: Listen to the 'navigation' collection in Firestore ---
+  void _zoomIn() {
+    final currentZoom = _mapController.camera.zoom;
+    final newZoom = (currentZoom + 1).clamp(3.0, 18.0);
+    _mapController.move(_mapController.camera.center, newZoom);
+  }
+
+  void _zoomOut() {
+    final currentZoom = _mapController.camera.zoom;
+    final newZoom = (currentZoom - 1).clamp(3.0, 18.0);
+    _mapController.move(_mapController.camera.center, newZoom);
+  }
+  
+  Future<void> _showDestinationReachedDialog() async {
+    if (!mounted) return;
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext dialogContext) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.check_circle_outline, color: Colors.green),
+            SizedBox(width: 10),
+            Text('Destination Reached!'),
+          ],
+        ),
+        content: const Text('You have arrived at your charging station.'),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.of(context).pushNamedAndRemoveUntil(
+                AppRoutes.evuserDashboard,
+                (route) => false,
+                arguments: {'role': 'EV User', 'email': widget.email},
+              );
+            },
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _subscribeToNavigationStatus() {
     _navigationStatusSubscription = FirebaseFirestore.instance
         .collection('navigation')
@@ -72,13 +113,28 @@ class _LiveMapPageState extends State<LiveMapPage> {
       if (mounted && snapshot.exists) {
         final data = snapshot.data();
         final isNavigatingNow = data?['isNavigating'] ?? false;
+        // --- FIX: Listen for the correct field name from the database ---
+        final hasReached = data?['vehicleReachedStation'] ?? false;
+
         if (isNavigatingNow != _isNavigating) {
           setState(() {
             _isNavigating = isNavigatingNow;
           });
         }
+        
+        if (hasReached && !_hasShownReachedPopup) {
+            print('✅ Destination reached flag received from backend!');
+            
+            setState(() => _hasShownReachedPopup = true);
+            
+            _stopNavigation();
+
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              _showDestinationReachedDialog();
+            });
+        }
+
       } else if (mounted && _isNavigating) {
-        // If doc is deleted or doesn't exist, ensure we are not in navigating state
         setState(() {
           _isNavigating = false;
         });
@@ -86,23 +142,31 @@ class _LiveMapPageState extends State<LiveMapPage> {
     });
   }
 
-  // --- NEW: Method to start navigation ---
   Future<void> _startNavigation() async {
-    if (_userCarMarker == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text("Cannot start: User location not available yet.")),
-      );
-      return;
-    }
-    setState(() => _isUpdatingNavigation = true);
+    setState(() {
+      _isUpdatingNavigation = true;
+      _isNavigating = true;
+    });
 
     try {
-      final startPoint = _userCarMarker!.point;
+      final ref = FirebaseDatabase.instance.ref('vehicles/${_encodeEmailForRtdb(widget.email)}');
+      final snapshot = await ref.get();
+      if (!snapshot.exists || snapshot.value == null) {
+        throw Exception("Could not get latest vehicle location.");
+      }
+
+      final data = Map<String, dynamic>.from(snapshot.value as Map);
+      final lat = data['latitude'];
+      final lng = data['longitude'];
+
+      if (lat == null || lng == null) {
+        throw Exception("Latest vehicle location is invalid.");
+      }
+      
+      final startPoint = LatLng(lat, lng);
       final endPoint = widget.destination!;
       final userEmail = widget.email;
 
-      // 1. Update Firestore 'navigation' collection
       await FirebaseFirestore.instance
           .collection('navigation')
           .doc(userEmail)
@@ -113,13 +177,12 @@ class _LiveMapPageState extends State<LiveMapPage> {
         'end_lat': endPoint.latitude,
         'end_lng': endPoint.longitude,
         'isNavigating': true,
+        // --- FIX: Write the correct field name to the database ---
+        'vehicleReachedStation': false, 
         'timestamp': FieldValue.serverTimestamp(),
       });
 
-      // 2. Update Realtime DB 'isRunning' status
-      await FirebaseDatabase.instance
-          .ref('vehicles/${_encodeEmailForRtdb(userEmail)}')
-          .update({'isRunning': true});
+      await ref.update({'isRunning': true});
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -130,9 +193,10 @@ class _LiveMapPageState extends State<LiveMapPage> {
       }
     } catch (e) {
       if (mounted) {
+        setState(() => _isNavigating = false);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-              content: Text('Failed to start navigation: $e'),
+              content: Text('Failed to start navigation: ${e.toString()}'),
               backgroundColor: Colors.red),
         );
       }
@@ -141,32 +205,37 @@ class _LiveMapPageState extends State<LiveMapPage> {
     }
   }
 
-  // --- NEW: Method to stop navigation ---
   Future<void> _stopNavigation() async {
-    setState(() => _isUpdatingNavigation = true);
+    setState(() {
+      _isUpdatingNavigation = true;
+      _isNavigating = false;
+    });
+
     try {
       final userEmail = widget.email;
 
-      // 1. Update Firestore 'navigation' collection
       await FirebaseFirestore.instance
           .collection('navigation')
           .doc(userEmail)
           .update({'isNavigating': false});
 
-      // 2. Update Realtime DB 'isRunning' status
       await FirebaseDatabase.instance
           .ref('vehicles/${_encodeEmailForRtdb(userEmail)}')
           .update({'isRunning': false});
-
+      
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-              content: Text('Navigation stopped.'),
-              backgroundColor: Colors.orange),
-        );
+        // Don't show this snackbar if the "reached" popup is about to show
+        if (!_hasShownReachedPopup) {
+            ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+                content: Text('Navigation stopped.'),
+                backgroundColor: Colors.orange),
+          );
+        }
       }
     } catch (e) {
       if (mounted) {
+        setState(() => _isNavigating = true);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
               content: Text('Failed to stop navigation: $e'),
@@ -221,17 +290,12 @@ class _LiveMapPageState extends State<LiveMapPage> {
       if (lat != null && lng != null) {
         final newPosition = LatLng(lat, lng);
 
-        // --- THE FIX IS HERE ---
-        // If we are NOT in navigation mode and haven't centered yet, do it now.
-        if (widget.destination == null && !_hasCenteredOnCar) {
+        if (!_hasCenteredOnCar) {
           _mapController.move(newPosition, 15.0);
-          _hasCenteredOnCar = true; // Mark as centered so we don't keep jumping
+          _hasCenteredOnCar = true;
         }
 
-        // If we ARE in navigation mode, let the fitBounds logic handle centering.
-        if (widget.destination != null &&
-            _routePolyline == null &&
-            !_isLoadingRoute) {
+        if (widget.destination != null && !_hasFittedBounds && !_isLoadingRoute) {
           _fetchAndDrawRoute(newPosition, widget.destination!);
         }
 
@@ -240,8 +304,6 @@ class _LiveMapPageState extends State<LiveMapPage> {
             _userCarMarker = Marker(
               width: 40.0, height: 40.0,
               point: newPosition,
-              // Using a pre-made asset for the car is better for performance.
-              // Make sure you have a 'car_marker.png' in an 'assets/images/' folder.
               child: Image.asset('assets/images/car_marker.png'),
             );
           });
@@ -274,15 +336,16 @@ class _LiveMapPageState extends State<LiveMapPage> {
             _isLoadingRoute = false;
           });
 
-          // Wait for the map to be ready before fitting bounds
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (!mounted) return;
-            // The bounds should now include the user's car and the destination.
             final bounds = LatLngBounds.fromPoints([start, end]);
             _mapController.fitCamera(
               CameraFit.bounds(
                   bounds: bounds, padding: const EdgeInsets.all(50)),
             );
+            setState(() {
+              _hasFittedBounds = true;
+            });
           });
         }
       } else {
@@ -297,80 +360,117 @@ class _LiveMapPageState extends State<LiveMapPage> {
     }
   }
 
+  Widget _buildZoomControls() {
+    return Positioned(
+      bottom: widget.destination != null ? 90 : 20,
+      right: 15,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          FloatingActionButton.small(
+            heroTag: "zoomInButton",
+            backgroundColor: Colors.white,
+            foregroundColor: Colors.black,
+            onPressed: _zoomIn,
+            child: const Icon(Icons.add, size: 24),
+          ),
+          const SizedBox(height: 8),
+          FloatingActionButton.small(
+            heroTag: "zoomOutButton",
+            backgroundColor: Colors.white,
+            foregroundColor: Colors.black,
+            onPressed: _zoomOut,
+            child: const Icon(Icons.remove, size: 24),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    Widget mapContent = Stack(
+      children: [
+        FlutterMap(
+          mapController: _mapController,
+          options: MapOptions(
+            initialCenter: const LatLng(12.9716, 77.5946),
+            initialZoom: 14.0,
+          ),
+          children: [
+            TileLayer(
+              urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+            ),
+            if (_routePolyline != null)
+              PolylineLayer(polylines: [_routePolyline!]),
+            MarkerLayer(markers: _stationMarkers),
+            if (_userCarMarker != null)
+              MarkerLayer(markers: [_userCarMarker!]),
+          ],
+        ),
+        if (_userCarMarker == null || _isLoadingRoute)
+          Container(
+            color: Colors.black.withOpacity(0.5),
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const CircularProgressIndicator(color: Colors.white),
+                  const SizedBox(height: 16),
+                  Text(
+                    _isLoadingRoute
+                        ? 'Generating Route...'
+                        : "Waiting for vehicle's live location...",
+                    style: const TextStyle(color: Colors.white, fontSize: 16),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        _buildZoomControls(),
+        if (widget.destination != null)
+          Positioned(
+            bottom: 20,
+            left: 20,
+            right: 20,
+            child: Center(
+              child: FloatingActionButton.extended(
+                onPressed: _isUpdatingNavigation
+                    ? null
+                    : (_isNavigating ? _stopNavigation : _startNavigation),
+                icon: _isUpdatingNavigation
+                    ? Container(
+                        width: 24,
+                        height: 24,
+                        padding: const EdgeInsets.all(2.0),
+                        child: const CircularProgressIndicator(
+                          color: Colors.white,
+                          strokeWidth: 3,
+                        ),
+                      )
+                    : Icon(_isNavigating
+                        ? Icons.stop_rounded
+                        : Icons.play_arrow_rounded),
+                label: Text(_isNavigating ? 'Stop' : 'Start'),
+                backgroundColor:
+                    _isNavigating ? Colors.red.shade600 : Colors.green.shade600,
+              ),
+            ),
+          ),
+      ],
+    );
+
+    if (widget.isEmbedded) {
+      return mapContent;
+    }
+
     return Scaffold(
       appBar: AppBar(
-        title: Text(
-            widget.destination == null ? "Live Vehicle Map" : "Navigation"),
+        title: Text(widget.destination == null ? "" : "Navigation"),
         backgroundColor: Colors.white,
         foregroundColor: Colors.black,
       ),
-      // --- NEW: Add a FloatingActionButton for navigation control ---
-      floatingActionButton: widget.destination == null
-          ? null
-          : FloatingActionButton.extended(
-              onPressed: _isUpdatingNavigation
-                  ? null
-                  : (_isNavigating ? _stopNavigation : _startNavigation),
-              icon: _isUpdatingNavigation
-                  ? Container(
-                      width: 24,
-                      height: 24,
-                      padding: const EdgeInsets.all(2.0),
-                      child: const CircularProgressIndicator(
-                        color: Colors.white,
-                        strokeWidth: 3,
-                      ),
-                    )
-                  : Icon(_isNavigating
-                      ? Icons.stop_rounded
-                      : Icons.play_arrow_rounded),
-              label: Text(_isNavigating ? 'Stop' : 'Start'),
-              backgroundColor:
-                  _isNavigating ? Colors.red.shade600 : Colors.green.shade600,
-            ),
-      body: Stack(
-        children: [
-          FlutterMap(
-            mapController: _mapController,
-            options: MapOptions(
-              // Start with a generic center, it will be moved once data arrives.
-              initialCenter: const LatLng(12.9716, 77.5946),
-              initialZoom: 14.0,
-            ),
-            children: [
-              TileLayer(
-                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-              ),
-              if (_routePolyline != null)
-                PolylineLayer(polylines: [_routePolyline!]),
-              MarkerLayer(markers: _stationMarkers),
-              if (_userCarMarker != null)
-                MarkerLayer(markers: [_userCarMarker!]),
-            ],
-          ),
-          if (_userCarMarker == null || _isLoadingRoute)
-            Container(
-              color: Colors.black.withOpacity(0.5),
-              child: Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const CircularProgressIndicator(color: Colors.white),
-                    const SizedBox(height: 16),
-                    Text(
-                      _isLoadingRoute
-                          ? 'Generating Route...'
-                          : "Waiting for vehicle's live location...",
-                      style: const TextStyle(color: Colors.white, fontSize: 16),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-        ],
-      ),
+      body: mapContent,
     );
   }
 }

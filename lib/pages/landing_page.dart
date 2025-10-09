@@ -130,7 +130,7 @@ class LandingPage extends StatelessWidget {
                 Image.asset('assets/images/logo.jpg', height: 180),
                 const SizedBox(height: 80),
                 const Text(
-                  'Welcome to Our App',
+                  'Welcome ',
                   style: TextStyle(
                     fontSize: 28,
                     fontWeight: FontWeight.bold,
