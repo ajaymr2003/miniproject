@@ -13,6 +13,7 @@ import 'ev_user_setup.dart';
 import 'widgets/nearby_stations_widget.dart';
 import 'ai_recommendation_page.dart';
 import '../../services/ai_recommendation_service.dart';
+import '../../services/notification_service.dart'; // <-- IMPORT THE SERVICE
 import 'live_map_page.dart';
 import 'all_stations_status_page.dart';
 import 'notifications_page.dart';
@@ -20,7 +21,14 @@ import 'notifications_page.dart';
 // THIS IS THE CONTENT FOR THE FIRST TAB
 class HomePage extends StatefulWidget {
   final String email;
-  const HomePage({super.key, required this.email});
+  final bool shouldTriggerAi;
+  final VoidCallback onAiTriggered;
+  const HomePage({
+    super.key,
+    required this.email,
+    required this.shouldTriggerAi,
+    required this.onAiTriggered,
+  });
 
   @override
   State<HomePage> createState() => _HomePageState();
@@ -31,6 +39,10 @@ class _HomePageState extends State<HomePage> {
   bool _showLowBatteryWarning = true;
   List<StationWithDistance> _sortedStations = [];
   late final Stream<DatabaseEvent> _vehicleStream;
+  bool _aiTriggerConsumed = false;
+
+  // State for local notification trigger logic
+  int _previousBatteryLevel = 101; // Initialize high to allow first notification
 
   String _currentLocationName = 'Determining location...';
   LatLng? _lastKnownPosition;
@@ -67,7 +79,6 @@ class _HomePageState extends State<HomePage> {
         });
       }
     } catch (e) {
-      // On emulators, reverse geocoding can fail. Fallback to showing coordinates.
       if (mounted) {
         setState(() {
           _currentLocationName =
@@ -128,9 +139,6 @@ class _HomePageState extends State<HomePage> {
               _sortedStations.where((s) => s.data['name'] == name);
           if (matchedStation.isNotEmpty) {
             rankedStations.add(matchedStation.first);
-          } else {
-            print(
-                "Warning: AI recommended a station ('$name') that could not be found in the local list.");
           }
         }
 
@@ -177,11 +185,30 @@ class _HomePageState extends State<HomePage> {
           final data = Map<String, dynamic>.from(
             snapshot.data!.snapshot.value as Map,
           );
-          batteryLevel = (data['batteryLevel'] as num?)?.toInt() ?? 100;
+          final currentBatteryLevel = (data['batteryLevel'] as num?)?.toInt() ?? 100;
+          batteryLevel = currentBatteryLevel;
           isRunning = data['isRunning'] ?? false;
           aiThreshold =
               (data['aiRecommendationThreshold'] as num?)?.toDouble() ?? 30.0;
-          isLowBattery = batteryLevel <= aiThreshold;
+          isLowBattery = currentBatteryLevel <= aiThreshold;
+
+          // --- LOGIC TO TRIGGER LOCAL NOTIFICATION ---
+          // Check if battery has just crossed the threshold going down
+          if (currentBatteryLevel <= aiThreshold && _previousBatteryLevel > aiThreshold) {
+            print("Threshold crossed! Battery: $currentBatteryLevel%, Threshold: $aiThreshold%. Sending notification.");
+            NotificationService.instance.showLowBatteryNotification(currentBatteryLevel);
+          }
+          _previousBatteryLevel = currentBatteryLevel;
+
+          // --- LOGIC TO ACT ON A NOTIFICATION TAP ---
+          if (widget.shouldTriggerAi && !_aiTriggerConsumed) {
+            _aiTriggerConsumed = true; // Consume the trigger
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              print("🤖 AI recommendation triggered by notification tap!");
+              widget.onAiTriggered(); // Notify parent to reset the flag
+              _findBestStation(batteryLevel.toDouble());
+            });
+          }
 
           final lat = data['latitude'];
           final lng = data['longitude'];
@@ -565,18 +592,16 @@ class _EVUserDashboardState extends State<EVUserDashboard> {
   int _selectedIndex = 0;
   String? _email;
   bool _isLoading = true;
+  bool _shouldTriggerAi = false;
   bool _setupDialogOpen = false;
-  late final List<Widget> _pages;
 
   @override
   void initState() {
     super.initState();
+    _shouldTriggerAi = widget.triggerAiRecommendation;
     _initializeAndCheckProfile();
   }
 
-  // --- NEW FUNCTION ---
-  /// Ensures the Realtime Database node for the vehicle exists.
-  /// This is a fallback for older user accounts that might have missed setup.
   Future<void> _ensureRtdbVehicleNodeExists(String email) async {
     try {
       final encodedEmail = email.replaceAll('.', ',');
@@ -585,7 +610,6 @@ class _EVUserDashboardState extends State<EVUserDashboard> {
 
       if (!snapshot.exists) {
         print("⚠️ RTDB node missing for $email. Creating it now...");
-        // Fetch user details from Firestore to populate the node
         final userDoc = await FirebaseFirestore.instance.collection('users').doc(email).get();
         final userData = userDoc.data() ?? {};
 
@@ -596,7 +620,7 @@ class _EVUserDashboardState extends State<EVUserDashboard> {
           'isRunning': false,
           'batteryLevel': 100,
           'aiRecommendationThreshold': userData['aiRecommendationThreshold'] ?? 30.0,
-          'latitude': null, // Initialize with null location
+          'latitude': null,
           'longitude': null,
         });
         print("✅ Created missing RTDB node for $email.");
@@ -606,7 +630,6 @@ class _EVUserDashboardState extends State<EVUserDashboard> {
     }
   }
 
-  // --- MODIFIED ---
   Future<void> _initializeAndCheckProfile() async {
     String emailToUse = widget.email;
     if (emailToUse.isEmpty) {
@@ -619,14 +642,6 @@ class _EVUserDashboardState extends State<EVUserDashboard> {
     }
 
     _email = emailToUse;
-    _pages = [
-      HomePage(email: _email!),
-      LiveMapPage(email: _email!, isEmbedded: true),
-      const HistoryPage(),
-      const EVUserProfile(),
-    ];
-
-    // --- ADDED THE CHECK HERE ---
     await _ensureRtdbVehicleNodeExists(emailToUse);
 
     try {
@@ -648,9 +663,6 @@ class _EVUserDashboardState extends State<EVUserDashboard> {
     }
     if (mounted) {
       setState(() => _isLoading = false);
-      if (widget.triggerAiRecommendation) {
-        // The logic has been moved inside HomePage's StreamBuilder for reliability.
-      }
     }
   }
 
@@ -710,7 +722,23 @@ class _EVUserDashboardState extends State<EVUserDashboard> {
           : _email == null
               ? const Center(
                   child: Text("Could not load user data. Please log in again."))
-              : IndexedStack(index: _selectedIndex, children: _pages),
+              : IndexedStack(
+                  index: _selectedIndex,
+                  children: [
+                    HomePage(
+                      email: _email!,
+                      shouldTriggerAi: _shouldTriggerAi,
+                      onAiTriggered: () {
+                        if (mounted && _shouldTriggerAi) {
+                          setState(() => _shouldTriggerAi = false);
+                        }
+                      },
+                    ),
+                    LiveMapPage(email: _email!, isEmbedded: true),
+                    const HistoryPage(),
+                    const EVUserProfile(),
+                  ],
+                ),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _selectedIndex,
         onTap: _onItemTapped,

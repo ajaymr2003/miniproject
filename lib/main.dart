@@ -1,3 +1,5 @@
+// lib/main.dart
+
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
@@ -11,7 +13,6 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   try {
-    // The initializer now just sets up services, it doesn't decide the route.
     await AppInitializer.initializeApp();
     runApp(const MyApp());
   } catch (e, stack) {
@@ -36,8 +37,9 @@ class AppInitializer {
       );
     }
 
-    // --- Notifications ---
-    await NotificationService().initNotifications();
+    // --- Notifications (Local and FCM) ---
+    // Use the singleton instance to initialize
+    await NotificationService.instance.initNotifications();
 
     // --- AI Service ---
     try {
@@ -46,8 +48,6 @@ class AppInitializer {
     } catch (e) {
       debugPrint("⚠️ AI Service initialization failed: $e");
     }
-
-    // --- The logic for checking SharedPreferences has been moved to the SplashScreen ---
   }
 }
 
@@ -65,7 +65,6 @@ class MyApp extends StatelessWidget {
         fontFamily: 'Inter',
         useMaterial3: true,
       ),
-      // --- CHANGE: Always start at the splash route ---
       initialRoute: AppRoutes.splash,
       onGenerateRoute: AppRoutes.generateRoute,
     );

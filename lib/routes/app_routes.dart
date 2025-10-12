@@ -1,3 +1,5 @@
+// lib/routes/app_routes.dart
+
 import 'package:flutter/material.dart';
 import '../pages/splash_screen.dart'; // <-- ADD THIS IMPORT
 import '../pages/landing_page.dart';
@@ -65,17 +67,21 @@ class AppRoutes {
         return MaterialPageRoute(builder: (_) => const ManageStationsPage());
 
       case evuserDashboard:
-        final args = settings.arguments;
         String role = 'EV User';
         String email = '';
-        if (args is Map<String, dynamic>) {
-          role = args['role'] ?? 'EV User';
-          email = args['email'] ?? '';
-        } else if (args is String) {
-          role = args;
+        bool triggerAi = false;
+
+        if (settings.arguments is Map<String, dynamic>) {
+          final args = settings.arguments as Map<String, dynamic>;
+          role = args['role'] as String? ?? 'EV User';
+          email = args['email'] as String? ?? '';
+          triggerAi = args['triggerAiRecommendation'] as bool? ?? false;
+        } else if (settings.arguments is String) {
+          // Old way of passing only role string
+          role = settings.arguments as String;
         }
         return MaterialPageRoute(
-          builder: (_) => EVUserDashboard(role: role, email: email),
+          builder: (_) => EVUserDashboard(role: role, email: email, triggerAiRecommendation: triggerAi),
         );
       case adminDashboard:
         final role =

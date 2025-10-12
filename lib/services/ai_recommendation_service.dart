@@ -34,11 +34,11 @@ class StationInfo {
 class AiRecommendationService {
   AiRecommendationService._();
   static final AiRecommendationService instance = AiRecommendationService._();
-
+  
   late final GenerativeModel _model;
 
   Future<void> initialize() async {
-    _model = FirebaseAI.googleAI().generativeModel(model: 'gemini-1.5-flash-latest');
+    _model = FirebaseAI.googleAI().generativeModel(model: 'gemini-flash-latest');
     print("AI Service Initialized with model: gemini-1.5-flash-latest");
   }
 

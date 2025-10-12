@@ -3,9 +3,9 @@
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:shared_preferences/shared_preferences.dart'; // <-- 1. IMPORT THIS
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-// Replace 'smart_ev' with your actual project name from pubspec.yaml
 import 'package:miniproject/main.dart';
 import 'package:miniproject/routes/app_routes.dart';
 
@@ -16,89 +16,127 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
 class NotificationService {
   final _firebaseMessaging = FirebaseMessaging.instance;
+  final FlutterLocalNotificationsPlugin _localNotificationsPlugin =
+      FlutterLocalNotificationsPlugin();
+
+  // --- SINGLETON SETUP ---
+  NotificationService._();
+  static final NotificationService instance = NotificationService._();
 
   Future<void> initNotifications() async {
+    // --- 1. REQUEST PERMISSIONS AND INITIALIZE LOCAL NOTIFICATIONS ---
+    // Request permissions for iOS
+    const DarwinInitializationSettings iosSettings = DarwinInitializationSettings(
+      requestAlertPermission: true,
+      requestBadgePermission: true,
+      requestSoundPermission: true,
+    );
+
+    // Note: Ensure you have a launcher icon at 'android/app/src/main/res/mipmap/ic_launcher.png'
+    const AndroidInitializationSettings androidSettings =
+        AndroidInitializationSettings('@mipmap/ic_launcher');
+        
+    const InitializationSettings initSettings = InitializationSettings(
+      android: androidSettings,
+      iOS: iosSettings,
+    );
+
+    await _localNotificationsPlugin.initialize(
+      initSettings,
+      onDidReceiveNotificationResponse: _onLocalNotificationTapped,
+    );
+
+    // Request permissions for Android 13+
+    _localNotificationsPlugin
+        .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>()
+        ?.requestNotificationsPermission();
+
+
+    // --- 2. FCM SETUP (For potential future server-side notifications) ---
     try {
-      // Skip FCM initialization on web if service worker is not available
-      if (kIsWeb) {
-        print('Running on web - FCM may have limited functionality');
-        return;
-      }
+      if (kIsWeb) return;
 
       await _firebaseMessaging.requestPermission();
-
-      FirebaseMessaging.onBackgroundMessage(
-        _firebaseMessagingBackgroundHandler,
-      );
+      FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
 
       FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-        print('Foreground message received!');
-        if (message.notification != null &&
-            navigatorKey.currentContext != null) {
+        if (message.notification != null && navigatorKey.currentContext != null) {
           ScaffoldMessenger.of(navigatorKey.currentContext!).showSnackBar(
-            SnackBar(
-              content: Text(
-                '${message.notification!.title ?? ''}\n${message.notification!.body ?? ''}',
-              ),
-            ),
+            SnackBar(content: Text('${message.notification!.title ?? ''}\n${message.notification!.body ?? ''}')),
           );
         }
       });
 
       FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
-        print('Notification tapped (from background)');
-        _handleMessageNavigation(message);
+        _handleFcmMessageNavigation(message);
       });
 
       _firebaseMessaging.getInitialMessage().then((RemoteMessage? message) {
         if (message != null) {
-          print('Notification tapped (from terminated)');
-          _handleMessageNavigation(message);
+          _handleFcmMessageNavigation(message);
         }
       });
     } catch (e) {
-      print('Error initializing notifications: $e');
-      // Don't throw the error, just log it to prevent app crash
+      print('Error initializing FCM: $e');
     }
   }
 
-  // =========================================================================
-  // --- MODIFIED NAVIGATION LOGIC ---
-  // =========================================================================
-  void _handleMessageNavigation(RemoteMessage message) async {
-    // Check the 'data' payload sent from your Node.js server
-    if (message.data['screen'] == 'charging_station_finder') {
-      // --- FOR THE FUTURE ---
-      // WHEN YOU CREATE THE STATION FINDER SCREEN, YOU WILL UNCOMMENT THIS:
-      // navigatorKey.currentState?.pushNamed(AppRoutes.findStations);
-      // print('Navigating to station finder screen...');
-
-      // --- FOR NOW: Navigate to the User Dashboard as a safe default ---
-      print('Station finder not built yet. Navigating to EV User Dashboard.');
-      _navigateToDashboard();
-    } else {
-      // If the notification doesn't specify a screen, also go to the dashboard.
-      _navigateToDashboard();
+  void _onLocalNotificationTapped(NotificationResponse response) {
+    if (response.payload != null && response.payload! == 'ai_recommendation') {
+      print('Local low-battery notification tapped. Triggering AI.');
+      _navigateToDashboard(triggerAi: true);
     }
   }
+  
+  void _handleFcmMessageNavigation(RemoteMessage message) {
+    // This can be used for other push notifications from a server
+    _navigateToDashboard();
+  }
 
-  // New helper function to navigate to the dashboard
-  void _navigateToDashboard() async {
-    // Get user info from storage, because the app might be closed.
+  Future<void> showLowBatteryNotification(int batteryLevel) async {
+    const AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
+      'low_battery_channel',
+      'Low Battery Alerts',
+      channelDescription: 'Notifications for low EV battery levels.',
+      importance: Importance.max,
+      priority: Priority.high,
+      ticker: 'ticker',
+    );
+    const NotificationDetails notificationDetails = NotificationDetails(
+      android: androidDetails,
+      iOS: DarwinNotificationDetails(),
+    );
+
+    await _localNotificationsPlugin.show(
+      0, // Notification ID
+      'Low Battery Alert!',
+      'Your EV battery is at $batteryLevel%. Tap to find a charging station.',
+      notificationDetails,
+      payload: 'ai_recommendation',
+    );
+    print("🔋 Low battery local notification has been shown.");
+  }
+
+  void _navigateToDashboard({bool triggerAi = false}) async {
     final prefs = await SharedPreferences.getInstance();
     final email = prefs.getString('email');
     final role = prefs.getString('lastRole');
 
     if (email != null && role == 'EV User') {
-      // We use pushNamedAndRemoveUntil to make the dashboard the new home screen,
-      // clearing any previous screens.
+      final arguments = <String, dynamic>{
+        'role': role,
+        'email': email,
+      };
+      if (triggerAi) {
+        arguments['triggerAiRecommendation'] = true;
+      }
+
       navigatorKey.currentState?.pushNamedAndRemoveUntil(
         AppRoutes.evuserDashboard,
-        (route) => false, // This predicate removes all routes below it
-        arguments: {'role': role, 'email': email},
+        (route) => false,
+        arguments: arguments,
       );
     }
   }
-
-  // =========================================================================
 }
