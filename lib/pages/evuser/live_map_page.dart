@@ -15,12 +15,14 @@ class LiveMapPage extends StatefulWidget {
   final String email;
   final LatLng? destination;
   final bool isEmbedded;
+  final String? destinationStationId;
 
   const LiveMapPage({
     super.key,
     required this.email,
     this.destination,
     this.isEmbedded = false,
+    this.destinationStationId,
   });
 
   @override
@@ -113,7 +115,6 @@ class _LiveMapPageState extends State<LiveMapPage> {
       if (mounted && snapshot.exists) {
         final data = snapshot.data();
         final isNavigatingNow = data?['isNavigating'] ?? false;
-        // --- FIX: Listen for the correct field name from the database ---
         final hasReached = data?['vehicleReachedStation'] ?? false;
 
         if (isNavigatingNow != _isNavigating) {
@@ -135,6 +136,8 @@ class _LiveMapPageState extends State<LiveMapPage> {
         }
 
       } else if (mounted && _isNavigating) {
+        // If the doc is deleted (e.g., by _stopNavigation), this will be triggered
+        // and correctly update the UI state.
         setState(() {
           _isNavigating = false;
         });
@@ -167,20 +170,26 @@ class _LiveMapPageState extends State<LiveMapPage> {
       final endPoint = widget.destination!;
       final userEmail = widget.email;
 
-      await FirebaseFirestore.instance
-          .collection('navigation')
-          .doc(userEmail)
-          .set({
+      final navigationData = <String, dynamic>{
         'email': userEmail,
         'start_lat': startPoint.latitude,
         'start_lng': startPoint.longitude,
         'end_lat': endPoint.latitude,
         'end_lng': endPoint.longitude,
         'isNavigating': true,
-        // --- FIX: Write the correct field name to the database ---
         'vehicleReachedStation': false, 
         'timestamp': FieldValue.serverTimestamp(),
-      });
+      };
+
+      if (widget.destinationStationId != null) {
+        navigationData['destinationStationId'] = widget.destinationStationId;
+        print("Saving navigation with station ID: ${widget.destinationStationId}");
+      }
+
+      await FirebaseFirestore.instance
+          .collection('navigation')
+          .doc(userEmail)
+          .set(navigationData);
 
       await ref.update({'isRunning': true});
 
@@ -214,17 +223,19 @@ class _LiveMapPageState extends State<LiveMapPage> {
     try {
       final userEmail = widget.email;
 
+      // --- THIS IS THE CHANGE ---
+      // Instead of updating the document, we delete it.
       await FirebaseFirestore.instance
           .collection('navigation')
           .doc(userEmail)
-          .update({'isNavigating': false});
+          .delete();
+      // --------------------------
 
       await FirebaseDatabase.instance
           .ref('vehicles/${_encodeEmailForRtdb(userEmail)}')
           .update({'isRunning': false});
       
       if (mounted) {
-        // Don't show this snackbar if the "reached" popup is about to show
         if (!_hasShownReachedPopup) {
             ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
@@ -235,6 +246,7 @@ class _LiveMapPageState extends State<LiveMapPage> {
       }
     } catch (e) {
       if (mounted) {
+        // If deletion fails, revert the UI state
         setState(() => _isNavigating = true);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(

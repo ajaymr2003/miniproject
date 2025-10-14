@@ -1,3 +1,6 @@
+// lib/pages/evuser/widgets/nearby_stations_widget.dart
+
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_database/firebase_database.dart';
@@ -5,26 +8,30 @@ import 'package:geolocator/geolocator.dart';
 
 import '../station_details_page.dart';
 
-// Helper class to hold both station data and its calculated distance
 class StationWithDistance {
   final QueryDocumentSnapshot stationDoc;
   final double distanceInMeters;
 
-  StationWithDistance(
-      {required this.stationDoc, required this.distanceInMeters});
+  StationWithDistance({
+    required this.stationDoc,
+    required this.distanceInMeters,
+  });
 
+  String get id => stationDoc.id;
   Map<String, dynamic> get data => stationDoc.data() as Map<String, dynamic>;
 }
 
 class NearbyStationsWidget extends StatefulWidget {
   final String email;
-  // Callback function to pass the sorted list back to the parent
   final Function(List<StationWithDistance>) onStationsSorted;
+  final GlobalKey<NavigatorState> navigatorKey;
+
 
   const NearbyStationsWidget({
     super.key,
     required this.email,
     required this.onStationsSorted,
+    required this.navigatorKey,
   });
 
   @override
@@ -32,6 +39,7 @@ class NearbyStationsWidget extends StatefulWidget {
 }
 
 class _NearbyStationsWidgetState extends State<NearbyStationsWidget> {
+  StreamSubscription<QuerySnapshot>? _stationSubscription;
   List<QueryDocumentSnapshot> _allStations = [];
   bool _isLoadingStations = true;
   String? _stationError;
@@ -39,29 +47,36 @@ class _NearbyStationsWidgetState extends State<NearbyStationsWidget> {
   @override
   void initState() {
     super.initState();
-    _fetchStations();
+    _listenToStations();
   }
 
-  // --- FULL FUNCTION DEFINITIONS ---
+  @override
+  void dispose() {
+    _stationSubscription?.cancel();
+    super.dispose();
+  }
 
-  Future<void> _fetchStations() async {
-    try {
-      final snapshot =
-          await FirebaseFirestore.instance.collection('stations').get();
+  void _listenToStations() {
+    final stationsQuery = FirebaseFirestore.instance
+        .collection('stations')
+        .where('isActive', isEqualTo: true)
+        .snapshots();
+
+    _stationSubscription = stationsQuery.listen((snapshot) {
       if (mounted) {
         setState(() {
           _allStations = snapshot.docs;
           _isLoadingStations = false;
         });
       }
-    } catch (e) {
+    }, onError: (error) {
       if (mounted) {
         setState(() {
           _stationError = "Failed to load stations.";
           _isLoadingStations = false;
         });
       }
-    }
+    });
   }
 
   String _encodeEmailForRtdb(String email) {
@@ -88,14 +103,6 @@ class _NearbyStationsWidgetState extends State<NearbyStationsWidget> {
     return stationsWithDistances;
   }
 
-  String _formatDistance(double meters) {
-    if (meters < 1000) {
-      return '${meters.toStringAsFixed(0)} m';
-    } else {
-      return '${(meters / 1000).toStringAsFixed(1)} km';
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final vehicleRtdbRef = FirebaseDatabase.instance
@@ -103,7 +110,7 @@ class _NearbyStationsWidgetState extends State<NearbyStationsWidget> {
 
     return StreamBuilder<DatabaseEvent>(
       stream: vehicleRtdbRef.onValue,
-      builder: (context, snapshot) {
+      builder: (context, userLocationSnapshot) {
         if (_isLoadingStations) {
           return const SizedBox(
               height: 150, child: Center(child: CircularProgressIndicator()));
@@ -115,16 +122,16 @@ class _NearbyStationsWidgetState extends State<NearbyStationsWidget> {
                   child: Text(_stationError!,
                       style: const TextStyle(color: Colors.red))));
         }
-        if (!snapshot.hasData || snapshot.data?.snapshot.value == null) {
+        if (!userLocationSnapshot.hasData || userLocationSnapshot.data?.snapshot.value == null) {
           return const SizedBox(
               height: 150,
               child: Center(child: Text("Waiting for live location...")));
         }
 
-        final data =
-            Map<String, dynamic>.from(snapshot.data!.snapshot.value as Map);
-        final userLat = data['latitude'];
-        final userLng = data['longitude'];
+        final userData =
+            Map<String, dynamic>.from(userLocationSnapshot.data!.snapshot.value as Map);
+        final userLat = userData['latitude'];
+        final userLng = userData['longitude'];
 
         if (userLat == null || userLng == null) {
           return const SizedBox(
@@ -134,9 +141,10 @@ class _NearbyStationsWidgetState extends State<NearbyStationsWidget> {
 
         final sortedStations = _calculateAndSortStations(userLat, userLng);
 
-        // Use the callback to notify the parent of the newly sorted list
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          widget.onStationsSorted(sortedStations);
+          if(mounted) {
+            widget.onStationsSorted(sortedStations);
+          }
         });
 
         if (sortedStations.isEmpty) {
@@ -152,9 +160,11 @@ class _NearbyStationsWidgetState extends State<NearbyStationsWidget> {
             itemCount: sortedStations.length,
             itemBuilder: (context, index) {
               final station = sortedStations[index];
-              return _buildStationCard(
-                station,
-                Colors.primaries[index % Colors.primaries.length].shade700,
+              return _StationCard(
+                station: station,
+                color: Colors.primaries[index % Colors.primaries.length].shade700,
+                email: widget.email,
+                navigatorKey: widget.navigatorKey,
               );
             },
           ),
@@ -162,48 +172,99 @@ class _NearbyStationsWidgetState extends State<NearbyStationsWidget> {
       },
     );
   }
+}
 
-  Widget _buildStationCard(StationWithDistance station, Color color) {
-    final name = station.data['name'] ?? 'Unknown';
-    final details =
-        '${_formatDistance(station.distanceInMeters)} - ${station.data['availableSlots'] ?? '?'} slots';
 
-    return GestureDetector(
-      onTap: () {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) =>
-                StationDetailsPage(station: station, email: widget.email),
-          ),
-        );
-      },
-      child: Container(
-        width: 150,
-        margin: const EdgeInsets.only(right: 16),
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-            color: color, borderRadius: BorderRadius.circular(16)),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            const Icon(Icons.ev_station, color: Colors.white, size: 40),
-            Column(
+class _StationCard extends StatelessWidget {
+  final StationWithDistance station;
+  final Color color;
+  final String email;
+  final GlobalKey<NavigatorState> navigatorKey;
+
+
+  const _StationCard({
+    required this.station, 
+    required this.color, 
+    required this.email,
+    required this.navigatorKey,
+  });
+  
+  String _formatDistance(double meters) {
+    if (meters < 1000) {
+      return '${meters.toStringAsFixed(0)} m';
+    } else {
+      return '${(meters / 1000).toStringAsFixed(1)} km';
+    }
+  }
+  
+  @override
+  Widget build(BuildContext context) {
+    final stationStatusRef = FirebaseDatabase.instance.ref('station_status/${station.id}');
+
+    return StreamBuilder<DatabaseEvent>(
+      stream: stationStatusRef.onValue,
+      builder: (context, snapshot) {
+        int availableSlots = 0;
+        int totalSlots = 0;
+
+        if (snapshot.hasData && snapshot.data?.snapshot.value != null) {
+          final data = snapshot.data!.snapshot.value;
+          if (data is List) {
+            totalSlots = data.length;
+            availableSlots = data.where((slotStatus) => slotStatus == true).length;
+          }
+        }
+        
+        final stationName = station.data['name'] ?? 'Unknown';
+        final details = '${_formatDistance(station.distanceInMeters)} - $availableSlots slots';
+        
+        // --- THIS LOG HAS BEEN REMOVED ---
+        // print("✅ Displaying Nearby Station Widget: $stationName");
+        // ---------------------------------
+        
+        return GestureDetector(
+          onTap: () {
+            navigatorKey.currentState!.push(
+              MaterialPageRoute(
+                builder: (context) =>
+                    StationDetailsPage(station: station, email: email),
+              ),
+            );
+          },
+          child: Container(
+            width: 150,
+            margin: const EdgeInsets.only(right: 16),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+                color: color, borderRadius: BorderRadius.circular(16)),
+            child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text(name,
-                    style: const TextStyle(
-                        color: Colors.white, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 4),
-                Text(details,
-                    style: TextStyle(
-                        color: Colors.white.withOpacity(0.8), fontSize: 12)),
+                const Icon(Icons.ev_station, color: Colors.white, size: 40),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      stationName,
+                      style: const TextStyle(
+                          color: Colors.white, fontWeight: FontWeight.bold),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      details,
+                      style: TextStyle(
+                          color: Colors.white.withOpacity(0.8), fontSize: 12),
+                    ),
+                  ],
+                ),
               ],
             ),
-          ],
-        ),
-      ),
+          ),
+        );
+      }
     );
   }
 }

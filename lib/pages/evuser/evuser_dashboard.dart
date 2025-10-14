@@ -13,7 +13,7 @@ import 'ev_user_setup.dart';
 import 'widgets/nearby_stations_widget.dart';
 import 'ai_recommendation_page.dart';
 import '../../services/ai_recommendation_service.dart';
-import '../../services/notification_service.dart'; // <-- IMPORT THE SERVICE
+import '../../services/notification_service.dart';
 import 'live_map_page.dart';
 import 'all_stations_status_page.dart';
 import 'notifications_page.dart';
@@ -23,11 +23,15 @@ class HomePage extends StatefulWidget {
   final String email;
   final bool shouldTriggerAi;
   final VoidCallback onAiTriggered;
+  // --- ADD NAVIGATOR KEY ---
+  final GlobalKey<NavigatorState> navigatorKey;
+
   const HomePage({
     super.key,
     required this.email,
     required this.shouldTriggerAi,
     required this.onAiTriggered,
+    required this.navigatorKey, // <-- Add to constructor
   });
 
   @override
@@ -35,18 +39,17 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
+  // ... (all state variables remain the same)
   bool _isAiLoading = false;
   bool _showLowBatteryWarning = true;
   List<StationWithDistance> _sortedStations = [];
   late final Stream<DatabaseEvent> _vehicleStream;
   bool _aiTriggerConsumed = false;
-
-  // State for local notification trigger logic
-  int _previousBatteryLevel = 101; // Initialize high to allow first notification
-
+  int _previousBatteryLevel = 101;
   String _currentLocationName = 'Determining location...';
   LatLng? _lastKnownPosition;
   bool _isFetchingLocationName = false;
+
 
   @override
   void initState() {
@@ -57,6 +60,7 @@ class _HomePageState extends State<HomePage> {
     _vehicleStream = vehicleRtdbRef.onValue;
   }
 
+  // ... (all methods like _encodeEmailForRtdb, _updateLocationNameFromCoordinates, _findBestStation remain unchanged)
   String _encodeEmailForRtdb(String email) {
     return email.replaceAll('.', ',');
   }
@@ -64,7 +68,6 @@ class _HomePageState extends State<HomePage> {
   Future<void> _updateLocationNameFromCoordinates(
       double lat, double lng) async {
     if (_isFetchingLocationName) return;
-
     if (mounted) setState(() => _isFetchingLocationName = true);
 
     try {
@@ -85,7 +88,6 @@ class _HomePageState extends State<HomePage> {
               'Lat: ${lat.toStringAsFixed(4)}, Lng: ${lng.toStringAsFixed(4)}';
         });
       }
-      print("Error fetching location name (falling back to coordinates): $e");
     } finally {
       if (mounted) setState(() => _isFetchingLocationName = false);
     }
@@ -104,26 +106,53 @@ class _HomePageState extends State<HomePage> {
       final variant = userDoc.data()?['variant'] ?? '';
       final userVehicle = '$brand $variant'.trim();
 
-      final nearbyStationsForPrompt = _sortedStations.take(5).map((s) {
-        final data = s.data;
-        return StationInfo(
-          name: data['name'] ?? 'Unknown',
-          distanceKm: s.distanceInMeters / 1000,
-          availableSlots: (data['availableSlots'] as num?)?.toInt() ?? 0,
-          waitingTime: (data['waitingTime'] as num?)?.toInt() ?? 0,
-          chargerSpeed: (data['chargerSpeed'] as num?)?.toInt() ?? 50,
-        );
-      }).toList();
-
-      if (nearbyStationsForPrompt.isEmpty) {
+      final nearbyStations = _sortedStations.take(5).toList();
+      if (nearbyStations.isEmpty) {
         throw Exception("No nearby stations found to make a recommendation.");
       }
+
+      final List<StationInfo> stationsWithRealtimeStatus = [];
+
+      for (final station in nearbyStations) {
+        final stationStatusRef = FirebaseDatabase.instance.ref('station_status/${station.id}');
+        final snapshot = await stationStatusRef.get();
+        
+        int availableSlots = 0;
+        if (snapshot.exists && snapshot.value != null) {
+          final data = snapshot.value;
+          if (data is List) {
+            availableSlots = data.where((slotStatus) => slotStatus == true).length;
+          }
+        }
+
+        final stationData = station.data;
+        final List<dynamic> slotsMetadata = stationData['slots'] ?? [];
+        int maxChargerSpeed = 0;
+        if (slotsMetadata.isNotEmpty) {
+          maxChargerSpeed = slotsMetadata
+              .map<int>((s) => (s['powerKw'] as num?)?.toInt() ?? 0)
+              .reduce((a, b) => a > b ? a : b);
+        }
+
+        stationsWithRealtimeStatus.add(
+          StationInfo(
+            name: stationData['name'] ?? 'Unknown',
+            distanceKm: station.distanceInMeters / 1000,
+            availableSlots: availableSlots,
+            waitingTime: (stationData['waitingTime'] as num?)?.toInt() ?? 0,
+            chargerSpeed: maxChargerSpeed,
+          ),
+        );
+      }
+      
+      print("Sending data to AI with real-time slot counts...");
+      print(stationsWithRealtimeStatus.map((s) => s.toJson()).toList());
 
       final aiService = AiRecommendationService.instance;
       final recommendationData = await aiService.getEVStationRecommendation(
         userVehicle: userVehicle,
         batteryLevel: batteryLevel,
-        nearbyStations: nearbyStationsForPrompt,
+        nearbyStations: stationsWithRealtimeStatus,
       );
 
       if (mounted && recommendationData != null) {
@@ -192,20 +221,15 @@ class _HomePageState extends State<HomePage> {
               (data['aiRecommendationThreshold'] as num?)?.toDouble() ?? 30.0;
           isLowBattery = currentBatteryLevel <= aiThreshold;
 
-          // --- LOGIC TO TRIGGER LOCAL NOTIFICATION ---
-          // Check if battery has just crossed the threshold going down
           if (currentBatteryLevel <= aiThreshold && _previousBatteryLevel > aiThreshold) {
-            print("Threshold crossed! Battery: $currentBatteryLevel%, Threshold: $aiThreshold%. Sending notification.");
             NotificationService.instance.showLowBatteryNotification(currentBatteryLevel);
           }
           _previousBatteryLevel = currentBatteryLevel;
 
-          // --- LOGIC TO ACT ON A NOTIFICATION TAP ---
           if (widget.shouldTriggerAi && !_aiTriggerConsumed) {
-            _aiTriggerConsumed = true; // Consume the trigger
+            _aiTriggerConsumed = true;
             WidgetsBinding.instance.addPostFrameCallback((_) {
-              print("🤖 AI recommendation triggered by notification tap!");
-              widget.onAiTriggered(); // Notify parent to reset the flag
+              widget.onAiTriggered();
               _findBestStation(batteryLevel.toDouble());
             });
           }
@@ -223,7 +247,6 @@ class _HomePageState extends State<HomePage> {
                         newPosition.longitude) >
                     20) {
               _lastKnownPosition = newPosition;
-
               WidgetsBinding.instance.addPostFrameCallback((_) {
                 if (mounted) {
                   _updateLocationNameFromCoordinates(lat, lng);
@@ -275,8 +298,8 @@ class _HomePageState extends State<HomePage> {
                   TextButton(
                     onPressed: () {
                       if (_sortedStations.isNotEmpty) {
-                        Navigator.push(
-                          context,
+                        // --- USE THE NESTED NAVIGATOR ---
+                        widget.navigatorKey.currentState!.push(
                           MaterialPageRoute(
                             builder: (_) => AllStationsStatusPage(
                               stations: _sortedStations,
@@ -309,6 +332,8 @@ class _HomePageState extends State<HomePage> {
                     }
                   });
                 },
+                 // --- PASS THE NAVIGATOR KEY ---
+                navigatorKey: widget.navigatorKey,
               ),
               const SizedBox(height: 24),
               SizedBox(
@@ -352,7 +377,8 @@ class _HomePageState extends State<HomePage> {
       },
     );
   }
-
+  
+  // ... (All other _build helper methods remain unchanged)
   Widget _buildLowBatteryWarning(
       {required double batteryLevel,
       required VoidCallback onFindStations,
@@ -594,6 +620,13 @@ class _EVUserDashboardState extends State<EVUserDashboard> {
   bool _isLoading = true;
   bool _shouldTriggerAi = false;
   bool _setupDialogOpen = false;
+  
+  // --- 1. ADD NAVIGATOR KEYS FOR EACH TAB ---
+  final _homeNavigatorKey = GlobalKey<NavigatorState>();
+  final _mapNavigatorKey = GlobalKey<NavigatorState>();
+  final _historyNavigatorKey = GlobalKey<NavigatorState>();
+  final _profileNavigatorKey = GlobalKey<NavigatorState>();
+
 
   @override
   void initState() {
@@ -602,6 +635,7 @@ class _EVUserDashboardState extends State<EVUserDashboard> {
     _initializeAndCheckProfile();
   }
 
+  // ... (methods _ensureRtdbVehicleNodeExists, _initializeAndCheckProfile, _showProfileSetupDialog remain unchanged)
   Future<void> _ensureRtdbVehicleNodeExists(String email) async {
     try {
       final encodedEmail = email.replaceAll('.', ',');
@@ -609,7 +643,6 @@ class _EVUserDashboardState extends State<EVUserDashboard> {
       final snapshot = await ref.get();
 
       if (!snapshot.exists) {
-        print("⚠️ RTDB node missing for $email. Creating it now...");
         final userDoc = await FirebaseFirestore.instance.collection('users').doc(email).get();
         final userData = userDoc.data() ?? {};
 
@@ -623,7 +656,6 @@ class _EVUserDashboardState extends State<EVUserDashboard> {
           'latitude': null,
           'longitude': null,
         });
-        print("✅ Created missing RTDB node for $email.");
       }
     } catch (e) {
       print("❌ Failed to ensure RTDB node exists: $e");
@@ -698,8 +730,15 @@ class _EVUserDashboardState extends State<EVUserDashboard> {
       actions: [
         IconButton(
           onPressed: () {
-            Navigator.push(
-              context,
+            // Use the correct navigator key based on the current tab
+            final navigatorKey = [
+              _homeNavigatorKey,
+              _mapNavigatorKey,
+              _historyNavigatorKey,
+              _profileNavigatorKey
+            ][_selectedIndex];
+            
+            navigatorKey.currentState!.push(
               MaterialPageRoute(
                   builder: (context) => const NotificationsPage()),
             );
@@ -714,6 +753,7 @@ class _EVUserDashboardState extends State<EVUserDashboard> {
 
   @override
   Widget build(BuildContext context) {
+    // --- 2. BUILD THE BODY WITH INDEXEDSTACK AND NAVIGATORS ---
     return Scaffold(
       backgroundColor: const Color(0xFFF8F9FA),
       appBar: _buildAppBar(context),
@@ -725,18 +765,44 @@ class _EVUserDashboardState extends State<EVUserDashboard> {
               : IndexedStack(
                   index: _selectedIndex,
                   children: [
-                    HomePage(
-                      email: _email!,
-                      shouldTriggerAi: _shouldTriggerAi,
-                      onAiTriggered: () {
-                        if (mounted && _shouldTriggerAi) {
-                          setState(() => _shouldTriggerAi = false);
-                        }
-                      },
+                    // Each child is now a Navigator
+                    Navigator(
+                      key: _homeNavigatorKey,
+                      onGenerateRoute: (route) => MaterialPageRoute(
+                        settings: route,
+                        builder: (context) => HomePage(
+                          email: _email!,
+                          shouldTriggerAi: _shouldTriggerAi,
+                          onAiTriggered: () {
+                            if (mounted && _shouldTriggerAi) {
+                              setState(() => _shouldTriggerAi = false);
+                            }
+                          },
+                          navigatorKey: _homeNavigatorKey,
+                        ),
+                      ),
                     ),
-                    LiveMapPage(email: _email!, isEmbedded: true),
-                    const HistoryPage(),
-                    const EVUserProfile(),
+                    Navigator(
+                      key: _mapNavigatorKey,
+                      onGenerateRoute: (route) => MaterialPageRoute(
+                        settings: route,
+                        builder: (context) => LiveMapPage(email: _email!, isEmbedded: true),
+                      ),
+                    ),
+                    Navigator(
+                      key: _historyNavigatorKey,
+                      onGenerateRoute: (route) => MaterialPageRoute(
+                        settings: route,
+                        builder: (context) => const HistoryPage(),
+                      ),
+                    ),
+                    Navigator(
+                      key: _profileNavigatorKey,
+                      onGenerateRoute: (route) => MaterialPageRoute(
+                        settings: route,
+                        builder: (context) => const EVUserProfile(),
+                      ),
+                    ),
                   ],
                 ),
       bottomNavigationBar: BottomNavigationBar(
