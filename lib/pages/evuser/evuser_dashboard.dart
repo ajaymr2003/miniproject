@@ -17,6 +17,7 @@ import '../../services/notification_service.dart';
 import 'live_map_page.dart';
 import 'nearby_stations_page.dart'; 
 import 'notifications_page.dart';
+import 'history_page.dart';
 
 // --- NEW: Enum to manage the battery trend state ---
 enum BatteryTrend { stable, charging, draining }
@@ -26,6 +27,8 @@ class HomePage extends StatefulWidget {
   final bool shouldTriggerAi;
   final VoidCallback onAiTriggered;
   final GlobalKey<NavigatorState> navigatorKey;
+  // --- NEW: Receive the threshold from the parent dashboard ---
+  final double aiThreshold;
 
   const HomePage({
     super.key,
@@ -33,6 +36,7 @@ class HomePage extends StatefulWidget {
     required this.shouldTriggerAi,
     required this.onAiTriggered,
     required this.navigatorKey,
+    required this.aiThreshold,
   });
 
   @override
@@ -41,7 +45,6 @@ class HomePage extends StatefulWidget {
 
 class HomePageState extends State<HomePage> {
   bool _isAiLoading = false;
-  bool _showLowBatteryWarning = true;
   List<StationWithDistance> _sortedStations = [];
   late final Stream<DatabaseEvent> _vehicleStream;
   bool _aiTriggerConsumed = false;
@@ -49,6 +52,7 @@ class HomePageState extends State<HomePage> {
   String _currentLocationName = 'Determining location...';
   LatLng? _lastKnownPosition;
   bool _isFetchingLocationName = false;
+  bool _isDialogShowing = false; // Prevents showing multiple dialogs
   
   // --- NEW: State variable to hold the persistent trend ---
   BatteryTrend _batteryTrend = BatteryTrend.stable;
@@ -168,6 +172,49 @@ class HomePageState extends State<HomePage> {
     }
   }
 
+  Future<void> _showLowBatteryDialog(double batteryLevel) async {
+    if (_isDialogShowing || !mounted) return;
+    setState(() => _isDialogShowing = true);
+
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: const Row(
+            children: [
+              Icon(Icons.battery_alert_rounded, color: Colors.orange),
+              SizedBox(width: 10),
+              Text('Low Battery Warning'),
+            ],
+          ),
+          content: Text(
+            "Your vehicle's battery is at ${batteryLevel.round()}%. Would you like to get AI recommendations for a nearby charging station?",
+          ),
+          actions: <Widget>[
+            TextButton(
+              child: const Text('Ignore'),
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+              },
+            ),
+            ElevatedButton(
+              child: const Text('Find Stations'),
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+                _findBestStation(batteryLevel);
+              },
+            ),
+          ],
+        );
+      },
+    );
+
+    if(mounted) {
+      setState(() => _isDialogShowing = false);
+    }
+  }
+
   Future<void> _refreshSortedStations() async {
     final vehicleSnapshot = await FirebaseDatabase.instance.ref('vehicles/${_encodeEmailForRtdb(widget.email)}').get();
     if (!vehicleSnapshot.exists || !mounted) return;
@@ -198,8 +245,6 @@ class HomePageState extends State<HomePage> {
       builder: (context, snapshot) {
         int batteryLevel = 100;
         bool isRunning = false;
-        bool isLowBattery = false;
-        double aiThreshold = 30.0;
         
         if (snapshot.connectionState == ConnectionState.active &&
             snapshot.hasData &&
@@ -210,20 +255,18 @@ class HomePageState extends State<HomePage> {
           final currentBatteryLevel = (data['batteryLevel'] as num?)?.toInt() ?? 100;
           batteryLevel = currentBatteryLevel;
           isRunning = data['isRunning'] ?? false;
-          aiThreshold =
-              (data['aiRecommendationThreshold'] as num?)?.toDouble() ?? 30.0;
-          isLowBattery = currentBatteryLevel <= aiThreshold;
           
-          // --- NEW LOGIC: Update the trend state. It only changes if the direction changes. ---
           if (currentBatteryLevel < _previousBatteryLevel) {
             _batteryTrend = BatteryTrend.draining;
           } else if (currentBatteryLevel > _previousBatteryLevel) {
             _batteryTrend = BatteryTrend.charging;
           }
-          // If the level is the same, the trend persists from the previous state.
 
-          if (currentBatteryLevel <= aiThreshold && _previousBatteryLevel > aiThreshold) {
-            NotificationService.instance.showLowBatteryNotification(currentBatteryLevel);
+          // --- FINAL FIX: Use the reliable threshold passed from the parent widget ---
+          if (currentBatteryLevel <= widget.aiThreshold && _previousBatteryLevel > widget.aiThreshold) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+               _showLowBatteryDialog(currentBatteryLevel.toDouble());
+            });
           }
           _previousBatteryLevel = currentBatteryLevel;
 
@@ -257,7 +300,6 @@ class HomePageState extends State<HomePage> {
           }
         }
 
-        // --- NEW LOGIC: Determine color based on the persistent trend state ---
         final Color batteryColor;
         switch (_batteryTrend) {
           case BatteryTrend.charging:
@@ -275,16 +317,6 @@ class HomePageState extends State<HomePage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (isLowBattery && _showLowBatteryWarning) ...[
-                _buildLowBatteryWarning(
-                  batteryLevel: batteryLevel.toDouble(),
-                  onFindStations: () {
-                    _findBestStation(batteryLevel.toDouble());
-                  },
-                  onClose: () => setState(() => _showLowBatteryWarning = false),
-                ),
-                const SizedBox(height: 24),
-              ],
               _buildSectionTitle('Battery Status'),
               const SizedBox(height: 8),
               _buildBatteryStatus(batteryLevel, _currentLocationName, batteryColor),
@@ -364,7 +396,7 @@ class HomePageState extends State<HomePage> {
                   label: Text(
                       _isAiLoading ? 'Analyzing...' : 'Get AI Recommendations'),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: isLowBattery
+                    backgroundColor: (batteryLevel <= widget.aiThreshold)
                         ? Colors.red.shade600
                         : const Color(0xFF6777EF),
                     foregroundColor: Colors.white,
@@ -388,80 +420,6 @@ class HomePageState extends State<HomePage> {
     );
   }
   
-  Widget _buildLowBatteryWarning(
-      {required double batteryLevel,
-      required VoidCallback onFindStations,
-      required VoidCallback onClose}) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.red.shade50,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.red.shade200),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Icon(Icons.battery_alert_rounded,
-                  color: Colors.red.shade700, size: 40),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Low Battery!',
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 18,
-                        color: Colors.red.shade900,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      "Hurry up! Your battery is at ${batteryLevel.round()}%. Find a station now.",
-                      style: TextStyle(color: Colors.red.shade800),
-                    ),
-                  ],
-                ),
-              ),
-              InkWell(
-                onTap: onClose,
-                borderRadius: BorderRadius.circular(30),
-                child: Padding(
-                  padding: const EdgeInsets.all(4.0),
-                  child:
-                      Icon(Icons.close, color: Colors.red.shade400, size: 20),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          ElevatedButton.icon(
-            icon: _isAiLoading
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 2, color: Colors.white))
-                : const Icon(Icons.auto_awesome, size: 20),
-            label: Text(_isAiLoading ? 'Checking...' : 'Check It Out'),
-            onPressed: _isAiLoading ? null : onFindStations,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red.shade700,
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10)),
-            ),
-          )
-        ],
-      ),
-    );
-  }
-
   Widget _buildActionButton(
       {required IconData icon,
       required String label,
@@ -602,16 +560,6 @@ class HomePageState extends State<HomePage> {
   }
 }
 
-class HistoryPage extends StatelessWidget {
-  const HistoryPage({super.key});
-  @override
-  Widget build(BuildContext context) {
-    return const Center(
-        child: Text('History Page - Coming Soon!',
-            style: TextStyle(fontSize: 24)));
-  }
-}
-
 class EVUserDashboard extends StatefulWidget {
   final String role;
   final String email;
@@ -637,6 +585,8 @@ class EVUserDashboardState extends State<EVUserDashboard> {
   bool _isLoading = true;
   bool _shouldTriggerAi = false;
   bool _setupDialogOpen = false;
+  // --- NEW: State variable to hold the threshold from Firestore ---
+  double _aiThreshold = 30.0;
   
   final GlobalKey<HomePageState> homePageStateKey = GlobalKey<HomePageState>();
   final GlobalKey<NavigatorState> _homeNavigatorKey = GlobalKey<NavigatorState>();
@@ -726,6 +676,12 @@ class EVUserDashboardState extends State<EVUserDashboard> {
     try {
       final doc = await FirebaseFirestore.instance.collection('users').doc(emailToUse).get();
       final data = doc.data();
+      
+      // --- NEW: Read the threshold from Firestore on startup ---
+      if (data != null) {
+        _aiThreshold = (data['aiRecommendationThreshold'] as num?)?.toDouble() ?? 30.0;
+      }
+
       if (!doc.exists || data == null || data['brand'] == null || (data['brand'] as String).isEmpty) {
         WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) _showProfileSetupDialog(); });
       }
@@ -833,6 +789,8 @@ class EVUserDashboardState extends State<EVUserDashboard> {
                             }
                           },
                           navigatorKey: _homeNavigatorKey,
+                          // --- NEW: Pass the correct threshold to HomePage ---
+                          aiThreshold: _aiThreshold,
                         ),
                       ),
                     ),

@@ -8,8 +8,7 @@ import 'manage_stations_page.dart';
 import 'station_owner_profile_page.dart';
 import 'reports_page.dart';
 import 'request_station_page.dart';
-import 'view_issues_page.dart';
-import 'submit_issue_page.dart'; // <-- IMPORT THE NEW PAGE
+import 'submit_issue_page.dart';
 
 class StationOwnerDashboard extends StatefulWidget {
   final String role;
@@ -32,7 +31,7 @@ class _StationOwnerDashboardState extends State<StationOwnerDashboard> {
     _pages = [
       _DashboardHomeView(email: widget.email, onNavigate: _onItemTapped),
       const ManageStationsPage(),
-      const ReportsPage(),
+      const ReportsPage(), // This now correctly points to the new status control page
       StationOwnerProfilePage(email: widget.email),
     ];
     _initializeAndCheckProfile();
@@ -85,7 +84,7 @@ class _StationOwnerDashboardState extends State<StationOwnerDashboard> {
       case 1:
         return 'MANAGE STATIONS';
       case 2:
-        return 'REPORTS & ISSUES'; // <-- Updated title
+        return 'LIVE STATUS CONTROL'; // <-- Updated title
       default:
         return 'DASHBOARD';
     }
@@ -110,6 +109,7 @@ class _StationOwnerDashboardState extends State<StationOwnerDashboard> {
           },
           backgroundColor: Colors.blueAccent,
           child: const Icon(Icons.add_comment_outlined),
+          tooltip: 'Report an Issue',
         );
       default:
         return null; // No FAB on other pages

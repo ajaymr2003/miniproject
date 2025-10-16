@@ -94,6 +94,10 @@ class NotificationService {
     _navigateToDashboard();
   }
 
+  // --- THIS METHOD IS NO LONGER USED BY THE APP'S INTERNAL LOGIC ---
+  // It is being removed to prevent accidental calls and ensure the new
+  // in-app dialog is the only low-battery warning mechanism.
+  /*
   Future<void> showLowBatteryNotification(int batteryLevel) async {
     const AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
       'low_battery_channel',
@@ -117,6 +121,7 @@ class NotificationService {
     );
     print("🔋 Low battery local notification has been shown.");
   }
+  */
 
   void _navigateToDashboard({bool triggerAi = false}) async {
     final prefs = await SharedPreferences.getInstance();

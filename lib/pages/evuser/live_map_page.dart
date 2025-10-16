@@ -56,7 +56,6 @@ class _LiveMapPageState extends State<LiveMapPage> {
 
   // State variables for live data
   double _currentSpeed = 0.0;
-  // --- ADDED: State variable for battery level ---
   int _currentBatteryLevel = 0;
 
 
@@ -132,6 +131,7 @@ class _LiveMapPageState extends State<LiveMapPage> {
     _mapController.move(_mapController.camera.center, newZoom);
   }
   
+  // --- MODIFIED: On "OK" press, it now records the start details. ---
   Future<void> _showDestinationReachedDialog() async {
     if (!mounted || _hasShownReachedPopup) return;
     setState(() => _hasShownReachedPopup = true);
@@ -140,8 +140,16 @@ class _LiveMapPageState extends State<LiveMapPage> {
       barrierDismissible: false,
       builder: (BuildContext dialogContext) => AlertDialog(
         title: const Row(children: [Icon(Icons.check_circle_outline, color: Colors.green), SizedBox(width: 10), Text('Destination Reached!')]),
-        content: const Text('You have arrived at your charging station. You can now start your charging session.'),
-        actions: [TextButton(onPressed: () { Navigator.of(dialogContext).pop(); }, child: const Text('OK'))],
+        content: const Text('You have arrived at your charging station. Please wait for charging to begin.'),
+        actions: [
+          TextButton(
+            onPressed: () { 
+              Navigator.of(dialogContext).pop(); 
+              _recordChargingStartDetails(); // Record details on OK press
+            }, 
+            child: const Text('OK')
+          )
+        ],
       ),
     );
   }
@@ -207,25 +215,25 @@ class _LiveMapPageState extends State<LiveMapPage> {
       }
 
       final data = snapshot.data();
-      final isNavigatingNow = data?['isNavigating'] ?? false;
-      final hasReached = data?['vehicleReachedStation'] ?? false;
-      final isChargingNow = data?['isCharging'] ?? false;
-      final isChargingDone = data?['chargingComplete'] ?? false;
-      final isStationFull = data?['stationIsFull'] ?? false;
+      if (data == null) return;
+      
+      final isNavigatingNow = data['isNavigating'] ?? false;
+      final hasReached = data['vehicleReachedStation'] ?? false;
+      final isChargingNow = data['isCharging'] ?? false;
+      final isChargingDone = data['chargingComplete'] ?? false; 
+      final isStationFull = data['stationIsFull'] ?? false;
       
       if (isStationFull) {
-        final stationName = data?['cancelledStationName'] ?? 'Your destination';
+        final stationName = data['cancelledStationName'] ?? 'Your destination';
         _stopNavigation();
         WidgetsBinding.instance.addPostFrameCallback((_) => _showStationFullDialog(stationName));
         return;
       }
       
+      // --- MODIFIED: On charging complete, record end details THEN show dialog ---
       if (isChargingDone && !_previousChargingCompleteState) {
-        if (!_hasShownChargingCompletePopup) {
-            WidgetsBinding.instance.addPostFrameCallback((_) => _showChargingCompleteDialog());
-        }
-        _previousChargingCompleteState = isChargingDone;
-        return;
+        _previousChargingCompleteState = true; // Prevent re-triggering
+        _recordChargingEndDetailsAndShowDialog();
       }
 
       if (hasReached && !_hasArrived) {
@@ -240,7 +248,6 @@ class _LiveMapPageState extends State<LiveMapPage> {
         WidgetsBinding.instance.addPostFrameCallback((_) => _showChargingStartedDialog());
       }
 
-      _previousChargingCompleteState = isChargingDone;
       if (isNavigatingNow != _isNavigating) setState(() => _isNavigating = isNavigatingNow);
       if (isChargingNow != _isCharging) setState(() => _isCharging = isChargingNow);
     });
@@ -309,14 +316,46 @@ class _LiveMapPageState extends State<LiveMapPage> {
   Future<void> _finalizeAndClearSession() async {
     setState(() => _isUpdatingNavigation = true);
     try {
-      await FirebaseFirestore.instance.collection('navigation').doc(widget.email).delete();
+      final navDocRef = FirebaseFirestore.instance.collection('navigation').doc(widget.email);
+      final navDoc = await navDocRef.get();
+      
+      if (navDoc.exists) {
+        final navData = navDoc.data() as Map<String, dynamic>;
+        String stationName = 'Unknown Station';
+
+        if (navData['destinationStationId'] != null) {
+          final stationDoc = await FirebaseFirestore.instance.collection('stations').doc(navData['destinationStationId']).get();
+          if (stationDoc.exists) {
+            stationName = stationDoc.data()?['name'] ?? 'Unknown Station';
+          }
+        }
+        
+        await FirebaseFirestore.instance.collection('navigation_history').add({
+          'email': navData['email'],
+          'stationId': navData['destinationStationId'],
+          'stationName': stationName,
+          'start_lat': navData['start_lat'],
+          'start_lng': navData['start_lng'],
+          'end_lat': navData['end_lat'],
+          'end_lng': navData['end_lng'],
+          'startedAt': navData['timestamp'],
+          'endedAt': FieldValue.serverTimestamp(),
+          'chargingStartedAt': navData['chargingStartedAt'],
+          'chargingEndedAt': navData['chargingEndedAt'],
+          'batteryLevelAtStart': navData['batteryLevelAtStart'],
+          'batteryLevelAtEnd': navData['batteryLevelAtEnd'],
+        });
+      }
+
+      await navDocRef.delete();
       await FirebaseDatabase.instance.ref('vehicles/${_encodeEmailForRtdb(widget.email)}').update({'isRunning': false});
+      
       if (mounted) {
         widget.onNavigationComplete?.call();
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to clear session: $e'), backgroundColor: Colors.red));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to finalize session: $e'), backgroundColor: Colors.red));
       }
     } finally {
       if (mounted) {
@@ -325,32 +364,40 @@ class _LiveMapPageState extends State<LiveMapPage> {
     }
   }
 
-  Future<void> _startCharging() async {
-    setState(() => _isUpdatingNavigation = true);
+  // --- NEW METHOD: Records charging start details ---
+  Future<void> _recordChargingStartDetails() async {
     try {
-      await FirebaseFirestore.instance.collection('navigation').doc(widget.email).update({
-        'isCharging': true,
-      });
+      await FirebaseFirestore.instance.collection('navigation').doc(widget.email).set({
+        'chargingStartedAt': FieldValue.serverTimestamp(),
+        'batteryLevelAtStart': _currentBatteryLevel,
+      }, SetOptions(merge: true));
     } catch (e) {
-      if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: ${e.toString()}'), backgroundColor: Colors.red,));
-    } finally {
-      if (mounted) setState(() => _isUpdatingNavigation = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error recording start details: ${e.toString()}'), backgroundColor: Colors.red));
+      }
     }
   }
-  
-  Future<void> _markChargingComplete() async {
-    setState(() => _isUpdatingNavigation = true);
+
+  // --- NEW METHOD: Records end details, THEN shows the dialog ---
+  Future<void> _recordChargingEndDetailsAndShowDialog() async {
     try {
-      await FirebaseFirestore.instance.collection('navigation').doc(widget.email).update({
-        'isCharging': false,
-        'chargingComplete': true,
-      });
+      // First, save the final details to the database.
+      await FirebaseFirestore.instance.collection('navigation').doc(widget.email).set({
+        'chargingEndedAt': FieldValue.serverTimestamp(),
+        'batteryLevelAtEnd': _currentBatteryLevel,
+      }, SetOptions(merge: true));
+
+      // After the save is successful, show the completion dialog.
+      if (mounted) {
+        _showChargingCompleteDialog();
+      }
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: ${e.toString()}'), backgroundColor: Colors.red,));
-    } finally {
-      if (mounted) setState(() => _isUpdatingNavigation = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error recording end details: ${e.toString()}'), backgroundColor: Colors.red));
+      }
     }
   }
+
 
   void _triggerNewAiRecommendation() {
     widget.onNavigationComplete?.call();
@@ -386,7 +433,6 @@ class _LiveMapPageState extends State<LiveMapPage> {
       final lat = data['latitude'];
       final lng = data['longitude'];
       final speed = (data['speed'] as num?)?.toDouble() ?? 0.0;
-      // --- ADDED: Get battery level ---
       final battery = (data['batteryLevel'] as num?)?.toInt() ?? 0;
 
       if (lat != null && lng != null) {
@@ -401,7 +447,6 @@ class _LiveMapPageState extends State<LiveMapPage> {
         if (mounted) {
           setState(() {
             _currentSpeed = speed;
-            // --- ADDED: Update battery state ---
             _currentBatteryLevel = battery;
             _userCarMarker = Marker(
               width: 40.0, height: 40.0,
@@ -497,9 +542,7 @@ class _LiveMapPageState extends State<LiveMapPage> {
     );
   }
 
-  // --- NEW: Widget to display battery level ---
   Widget _buildBatteryDisplay() {
-    // Determine color and icon based on level
     Color batteryColor = Colors.greenAccent;
     IconData icon = Icons.battery_full;
 
@@ -513,7 +556,7 @@ class _LiveMapPageState extends State<LiveMapPage> {
 
     return Positioned(
       top: 15,
-      left: 15, // Top-left corner
+      left: 15,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
@@ -542,11 +585,8 @@ class _LiveMapPageState extends State<LiveMapPage> {
     );
   }
   
+  // --- MODIFIED: Simplified button logic ---
   Widget _buildNavigationControlButton() {
-    Widget buttonContent;
-    VoidCallback? onPressed;
-    Color backgroundColor;
-    
     if (_isUpdatingNavigation) {
       return const FloatingActionButton.extended(
         onPressed: null,
@@ -555,31 +595,32 @@ class _LiveMapPageState extends State<LiveMapPage> {
       );
     }
 
-    if (_hasArrived && !_isCharging) {
-      onPressed = _startCharging;
-      backgroundColor = Colors.blueAccent;
-      buttonContent = const Row(children: [Icon(Icons.electric_bolt), SizedBox(width: 8), Text('Start Charging')]);
-    }
-    else if (_isCharging) {
-      onPressed = _markChargingComplete;
-      backgroundColor = Colors.green.shade600;
-      buttonContent = const Row(children: [Icon(Icons.check_circle_outline), SizedBox(width: 8), Text('Done Charging')]);
-    }
-    else if (_isNavigating) {
-      onPressed = _stopNavigation;
-      backgroundColor = Colors.red.shade600;
-      buttonContent = const Row(children: [Icon(Icons.stop_rounded), SizedBox(width: 8), Text('Stop Navigation')]);
-    }
-    else {
-      onPressed = _startNavigation;
-      backgroundColor = Colors.green.shade600;
-      buttonContent = const Row(children: [Icon(Icons.play_arrow_rounded), SizedBox(width: 8), Text('Start Navigation')]);
+    // If a session is active (navigating, arrived, or charging) show a Stop/Cancel button
+    if (_isNavigating || _hasArrived) {
+      if (_isCharging) {
+        // Charging has started, show a non-interactive status
+         return const FloatingActionButton.extended(
+          onPressed: null,
+          label: Text('Charging...'),
+          icon: Icon(Icons.electric_bolt),
+          backgroundColor: Colors.blueAccent,
+        );
+      }
+      // If navigating or arrived but not yet charging, allow user to stop the session
+      return FloatingActionButton.extended(
+        onPressed: _stopNavigation,
+        label: const Text('Stop Session'),
+        icon: const Icon(Icons.stop_rounded),
+        backgroundColor: Colors.red.shade600,
+      );
     }
     
+    // Default state: no active session, show Start button
     return FloatingActionButton.extended(
-      onPressed: onPressed,
-      label: buttonContent,
-      backgroundColor: backgroundColor,
+      onPressed: _startNavigation,
+      label: const Text('Start Navigation'),
+      icon: const Icon(Icons.play_arrow_rounded),
+      backgroundColor: Colors.green.shade600,
     );
   }
 
@@ -610,20 +651,17 @@ class _LiveMapPageState extends State<LiveMapPage> {
             ),
           ),
         _buildZoomControls(),
-        // --- ADDED: Display speed and battery when navigating (or charging) ---
         if (_isNavigating || _hasArrived) _buildSpeedDisplay(),
         if (_isNavigating || _hasArrived) _buildBatteryDisplay(),
-        // --- MODIFICATION: Add a cancel button when a destination is set and user has not arrived ---
         if (widget.destination != null && !_hasArrived)
           Positioned(
-            top: 90, // Positioned below the speed/battery indicators
+            top: 90,
             right: 15,
             child: FloatingActionButton.small(
               heroTag: "cancelRouteButton",
               backgroundColor: Colors.white,
               foregroundColor: Colors.red,
               onPressed: () {
-                // This call notifies the parent dashboard to clear the destination state.
                 widget.onNavigationComplete?.call();
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(content: Text('Route cancelled.')),
@@ -633,7 +671,7 @@ class _LiveMapPageState extends State<LiveMapPage> {
               child: const Icon(Icons.close),
             ),
           ),
-        if (widget.destination != null)
+        if (widget.destination != null && !_previousChargingCompleteState)
           Positioned(
             bottom: 20, left: 20, right: 20,
             child: Center(child: _buildNavigationControlButton()),

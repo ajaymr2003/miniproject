@@ -1,5 +1,7 @@
+// lib/pages/station_owner/station_owner_profile_page.dart
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../routes/app_routes.dart';
 
@@ -16,10 +18,7 @@ class _StationOwnerProfilePageState extends State<StationOwnerProfilePage> {
   Map<String, dynamic>? _userData;
   Map<String, dynamic> _stationStats = {
     'totalStations': 0,
-    'totalSlots': 0,
-    'availableSlots': 0,
     'stationNames': <String>[],
-    'primaryStationAddress': null,
   };
 
   @override
@@ -64,26 +63,16 @@ class _StationOwnerProfilePageState extends State<StationOwnerProfilePage> {
           .where('ownerEmail', isEqualTo: widget.email)
           .get();
 
-      int totalSlots = 0;
-      int availableSlots = 0;
       List<String> stationNames = [];
-      String? primaryAddress;
-
       for (var doc in query.docs) {
         final data = doc.data();
-        totalSlots += (data['totalSlots'] as num?)?.toInt() ?? 0;
-        availableSlots += (data['availableSlots'] as num?)?.toInt() ?? 0;
         if (data['name'] != null) stationNames.add(data['name']);
-        if (primaryAddress == null && data['address'] != null) primaryAddress = data['address'];
       }
 
       if (mounted) {
         _stationStats = {
           'totalStations': query.size,
-          'totalSlots': totalSlots,
-          'availableSlots': availableSlots,
           'stationNames': stationNames,
-          'primaryStationAddress': primaryAddress,
         };
       }
     } catch (e) {
@@ -100,13 +89,106 @@ class _StationOwnerProfilePageState extends State<StationOwnerProfilePage> {
     return '${names.first} (+${count - 1} more)';
   }
 
-  void _editProfile() {
-    // This is a placeholder for navigating to a dedicated edit page.
-    // For now, it shows a simple dialog.
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Dedicated edit page coming soon!')),
+  Future<void> _showEditProfileDialog() async {
+    if (_userData == null) return;
+
+    final formKey = GlobalKey<FormState>();
+    final nameController = TextEditingController(text: _userData!['fullName']);
+    final phoneController = TextEditingController(text: _userData!['phoneNumber']);
+    final addressController = TextEditingController(text: _userData!['address']);
+
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Edit Profile'),
+          content: SingleChildScrollView(
+            child: Form(
+              key: formKey,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextFormField(
+                    controller: nameController,
+                    decoration: const InputDecoration(labelText: 'Full Name', border: OutlineInputBorder()),
+                    validator: (v) => v!.isEmpty ? 'Please enter a name' : null,
+                  ),
+                  const SizedBox(height: 16),
+                  TextFormField(
+                    controller: phoneController,
+                    decoration: const InputDecoration(labelText: 'Phone Number', border: OutlineInputBorder()),
+                    keyboardType: TextInputType.phone,
+                    validator: (v) {
+                      if (v == null || v.isEmpty) return 'Please enter a phone number';
+                      if (v.length != 10 || int.tryParse(v) == null) return 'Must be 10 digits';
+                      return null;
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  TextFormField(
+                    controller: addressController,
+                    decoration: const InputDecoration(labelText: 'Business Address', border: OutlineInputBorder()),
+                    maxLines: 2,
+                    validator: (v) => v!.isEmpty ? 'Please enter an address' : null,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel')),
+            ElevatedButton(
+              onPressed: () {
+                if (formKey.currentState!.validate()) {
+                  Navigator.of(context).pop(true);
+                }
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        );
+      },
     );
+
+    if (result == true) {
+      await _updateProfile(
+        nameController.text.trim(),
+        phoneController.text.trim(),
+        addressController.text.trim(),
+      );
+    }
+
+    nameController.dispose();
+    phoneController.dispose();
+    addressController.dispose();
   }
+
+  Future<void> _updateProfile(String name, String phone, String address) async {
+    try {
+      await FirebaseFirestore.instance.collection('users').doc(widget.email).update({
+        'fullName': name,
+        'phoneNumber': phone,
+        'address': address,
+      });
+      setState(() {
+        _userData?['fullName'] = name;
+        _userData?['phoneNumber'] = phone;
+        _userData?['address'] = address;
+      });
+      if(mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Profile updated successfully!'), backgroundColor: Colors.green),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to update profile: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
 
   Future<void> _logout() async {
     final shouldLogout = await showDialog<bool>(
@@ -121,15 +203,18 @@ class _StationOwnerProfilePageState extends State<StationOwnerProfilePage> {
       ),
     );
     if (shouldLogout == true) {
+      await FirebaseAuth.instance.signOut();
       final prefs = await SharedPreferences.getInstance();
       await prefs.clear();
-      if (context.mounted) Navigator.of(context).pushNamedAndRemoveUntil(AppRoutes.landing, (route) => false);
+      if (context.mounted) {
+        Navigator.of(context)
+            .pushNamedAndRemoveUntil(AppRoutes.landing, (route) => false);
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    // Each page in the dashboard stack should have its own Scaffold
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
@@ -137,7 +222,7 @@ class _StationOwnerProfilePageState extends State<StationOwnerProfilePage> {
         backgroundColor: Colors.white,
         foregroundColor: Colors.black,
         elevation: 0,
-        automaticallyImplyLeading: false, // Hide back button in tab view
+        automaticallyImplyLeading: false,
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
@@ -149,15 +234,21 @@ class _StationOwnerProfilePageState extends State<StationOwnerProfilePage> {
                     _buildProfileHeader(),
                     const SizedBox(height: 32),
                     _buildSectionHeader('Profile Information'),
+                    const SizedBox(height: 8),
+                    _buildInfoRow('Full Name', _userData?['fullName'] ?? 'N/A'),
+                    const Divider(height: 24),
                     _buildInfoRow('Email', _userData?['email'] ?? 'N/A'),
+                    const Divider(height: 24),
                     _buildInfoRow('Phone Number', _userData?['phoneNumber'] ?? 'Not Provided'),
-                    _buildInfoRow('Associated Station Name', _getAssociatedStationsText()),
-                    _buildInfoRow('Station Address', _stationStats['primaryStationAddress'] ?? 'N/A'),
-                    _buildInfoRow('Total Slots', _stationStats['totalSlots'].toString()),
-                    _buildInfoRow('Available Slots', _stationStats['availableSlots'].toString()),
+                    const Divider(height: 24),
+                    _buildInfoRow('Business Address', _userData?['address'] ?? 'Not Provided'),
+                    const SizedBox(height: 32),
+                    _buildSectionHeader('Station Information'),
+                    const SizedBox(height: 8),
+                    _buildInfoRow('Associated Stations', _getAssociatedStationsText()),
                     const SizedBox(height: 32),
                     _buildSectionHeader('Options'),
-                    _buildOptionRow('Edit Profile', Icons.edit_outlined, _editProfile),
+                    _buildOptionRow('Edit Profile', Icons.edit_outlined, _showEditProfileDialog),
                     _buildOptionRow('Change Password', Icons.lock_outline, () {
                       Navigator.pushNamed(context, AppRoutes.forgotPassword);
                     }),
@@ -170,10 +261,10 @@ class _StationOwnerProfilePageState extends State<StationOwnerProfilePage> {
   Widget _buildProfileHeader() {
     return Column(
       children: [
-        const CircleAvatar(
+        CircleAvatar(
           radius: 50,
-          backgroundColor: Color(0xFFE3F2FD),
-          child: Icon(Icons.person, size: 60, color: Color(0xFF1E88E5)),
+          backgroundColor: Colors.blue.shade50,
+          child: Icon(Icons.business_center, size: 60, color: Colors.blue.shade700),
         ),
         const SizedBox(height: 16),
         Text(
@@ -196,22 +287,19 @@ class _StationOwnerProfilePageState extends State<StationOwnerProfilePage> {
   }
 
   Widget _buildInfoRow(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 12.0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            label,
-            style: TextStyle(color: Colors.grey.shade600, fontSize: 14),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            value,
-            style: const TextStyle(color: Colors.black, fontSize: 16, fontWeight: FontWeight.w500),
-          ),
-        ],
-      ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: TextStyle(color: Colors.grey.shade600, fontSize: 14),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          value,
+          style: const TextStyle(color: Colors.black, fontSize: 16, fontWeight: FontWeight.w500),
+        ),
+      ],
     );
   }
 

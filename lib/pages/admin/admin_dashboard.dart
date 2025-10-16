@@ -8,7 +8,8 @@ import '../../routes/app_routes.dart';
 import 'ev_user_details_page.dart';
 import 'station_owner_details_page.dart';
 import 'admin_profile_page.dart';
-import 'admin_view_issues_page.dart'; // <-- 1. IMPORT THE NEW PAGE
+import 'admin_view_issues_page.dart';
+import 'live_station_status_page.dart';
 
 class AdminDashboard extends StatefulWidget {
   final String role;
@@ -259,6 +260,12 @@ class _AdminHomeViewState extends State<_AdminHomeView> {
           }),
           _buildActionButton('Manage Station Owners', () {
             widget.onNavigate(1);
+          }),
+          _buildActionButton('Live Station Status', () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (context) => const LiveStationStatusPage()),
+            );
           }),
           _buildActionButton('User Management', () {
             Navigator.push(
