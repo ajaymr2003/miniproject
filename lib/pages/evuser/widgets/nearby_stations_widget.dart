@@ -24,13 +24,14 @@ class StationWithDistance {
 class NearbyStationsWidget extends StatefulWidget {
   final String email;
   final Function(List<StationWithDistance>) onStationsSorted;
+  // --- MODIFICATION: Re-add the navigatorKey ---
   final GlobalKey<NavigatorState> navigatorKey;
-
 
   const NearbyStationsWidget({
     super.key,
     required this.email,
     required this.onStationsSorted,
+    // --- MODIFICATION: Add key to constructor ---
     required this.navigatorKey,
   });
 
@@ -164,6 +165,7 @@ class _NearbyStationsWidgetState extends State<NearbyStationsWidget> {
                 station: station,
                 color: Colors.primaries[index % Colors.primaries.length].shade700,
                 email: widget.email,
+                // --- MODIFICATION: Pass the key to the card ---
                 navigatorKey: widget.navigatorKey,
               );
             },
@@ -179,13 +181,14 @@ class _StationCard extends StatelessWidget {
   final StationWithDistance station;
   final Color color;
   final String email;
+  // --- MODIFICATION: Re-add the navigatorKey ---
   final GlobalKey<NavigatorState> navigatorKey;
-
 
   const _StationCard({
     required this.station, 
     required this.color, 
     required this.email,
+    // --- MODIFICATION: Add key to constructor ---
     required this.navigatorKey,
   });
   
@@ -218,11 +221,8 @@ class _StationCard extends StatelessWidget {
         final stationName = station.data['name'] ?? 'Unknown';
         final details = '${_formatDistance(station.distanceInMeters)} - $availableSlots slots';
         
-        // --- THIS LOG HAS BEEN REMOVED ---
-        // print("✅ Displaying Nearby Station Widget: $stationName");
-        // ---------------------------------
-        
         return GestureDetector(
+          // --- MAJOR CHANGE: Use the provided navigatorKey, NOT the rootNavigator ---
           onTap: () {
             navigatorKey.currentState!.push(
               MaterialPageRoute(

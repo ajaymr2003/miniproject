@@ -15,15 +15,16 @@ import 'ai_recommendation_page.dart';
 import '../../services/ai_recommendation_service.dart';
 import '../../services/notification_service.dart';
 import 'live_map_page.dart';
-import 'all_stations_status_page.dart';
+import 'nearby_stations_page.dart'; 
 import 'notifications_page.dart';
 
-// THIS IS THE CONTENT FOR THE FIRST TAB
+// --- NEW: Enum to manage the battery trend state ---
+enum BatteryTrend { stable, charging, draining }
+
 class HomePage extends StatefulWidget {
   final String email;
   final bool shouldTriggerAi;
   final VoidCallback onAiTriggered;
-  // --- ADD NAVIGATOR KEY ---
   final GlobalKey<NavigatorState> navigatorKey;
 
   const HomePage({
@@ -31,15 +32,14 @@ class HomePage extends StatefulWidget {
     required this.email,
     required this.shouldTriggerAi,
     required this.onAiTriggered,
-    required this.navigatorKey, // <-- Add to constructor
+    required this.navigatorKey,
   });
 
   @override
-  State<HomePage> createState() => _HomePageState();
+  State<HomePage> createState() => HomePageState();
 }
 
-class _HomePageState extends State<HomePage> {
-  // ... (all state variables remain the same)
+class HomePageState extends State<HomePage> {
   bool _isAiLoading = false;
   bool _showLowBatteryWarning = true;
   List<StationWithDistance> _sortedStations = [];
@@ -49,6 +49,9 @@ class _HomePageState extends State<HomePage> {
   String _currentLocationName = 'Determining location...';
   LatLng? _lastKnownPosition;
   bool _isFetchingLocationName = false;
+  
+  // --- NEW: State variable to hold the persistent trend ---
+  BatteryTrend _batteryTrend = BatteryTrend.stable;
 
 
   @override
@@ -59,8 +62,11 @@ class _HomePageState extends State<HomePage> {
     );
     _vehicleStream = vehicleRtdbRef.onValue;
   }
+  
+  void findBestStationPublic(double batteryLevel) {
+    _findBestStation(batteryLevel);
+  }
 
-  // ... (all methods like _encodeEmailForRtdb, _updateLocationNameFromCoordinates, _findBestStation remain unchanged)
   String _encodeEmailForRtdb(String email) {
     return email.replaceAll('.', ',');
   }
@@ -106,53 +112,18 @@ class _HomePageState extends State<HomePage> {
       final variant = userDoc.data()?['variant'] ?? '';
       final userVehicle = '$brand $variant'.trim();
 
+      await _refreshSortedStations();
+
       final nearbyStations = _sortedStations.take(5).toList();
       if (nearbyStations.isEmpty) {
         throw Exception("No nearby stations found to make a recommendation.");
       }
 
-      final List<StationInfo> stationsWithRealtimeStatus = [];
-
-      for (final station in nearbyStations) {
-        final stationStatusRef = FirebaseDatabase.instance.ref('station_status/${station.id}');
-        final snapshot = await stationStatusRef.get();
-        
-        int availableSlots = 0;
-        if (snapshot.exists && snapshot.value != null) {
-          final data = snapshot.value;
-          if (data is List) {
-            availableSlots = data.where((slotStatus) => slotStatus == true).length;
-          }
-        }
-
-        final stationData = station.data;
-        final List<dynamic> slotsMetadata = stationData['slots'] ?? [];
-        int maxChargerSpeed = 0;
-        if (slotsMetadata.isNotEmpty) {
-          maxChargerSpeed = slotsMetadata
-              .map<int>((s) => (s['powerKw'] as num?)?.toInt() ?? 0)
-              .reduce((a, b) => a > b ? a : b);
-        }
-
-        stationsWithRealtimeStatus.add(
-          StationInfo(
-            name: stationData['name'] ?? 'Unknown',
-            distanceKm: station.distanceInMeters / 1000,
-            availableSlots: availableSlots,
-            waitingTime: (stationData['waitingTime'] as num?)?.toInt() ?? 0,
-            chargerSpeed: maxChargerSpeed,
-          ),
-        );
-      }
-      
-      print("Sending data to AI with real-time slot counts...");
-      print(stationsWithRealtimeStatus.map((s) => s.toJson()).toList());
-
       final aiService = AiRecommendationService.instance;
       final recommendationData = await aiService.getEVStationRecommendation(
         userVehicle: userVehicle,
         batteryLevel: batteryLevel,
-        nearbyStations: stationsWithRealtimeStatus,
+        nearbyStations: nearbyStations,
       );
 
       if (mounted && recommendationData != null) {
@@ -171,8 +142,7 @@ class _HomePageState extends State<HomePage> {
           }
         }
 
-        await Navigator.push(
-          context,
+        await widget.navigatorKey.currentState?.push(
           MaterialPageRoute(
             builder: (context) => AiRecommendationPage(
               reason: reason,
@@ -198,6 +168,29 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  Future<void> _refreshSortedStations() async {
+    final vehicleSnapshot = await FirebaseDatabase.instance.ref('vehicles/${_encodeEmailForRtdb(widget.email)}').get();
+    if (!vehicleSnapshot.exists || !mounted) return;
+    final vehicleData = Map<String, dynamic>.from(vehicleSnapshot.value as Map);
+    final userLat = vehicleData['latitude'];
+    final userLng = vehicleData['longitude'];
+    if (userLat == null || userLng == null) return;
+    final stationsSnapshot = await FirebaseFirestore.instance.collection('stations').where('isActive', isEqualTo: true).get();
+    final allStations = stationsSnapshot.docs;
+    List<StationWithDistance> stationsWithDistances = [];
+    for (var stationDoc in allStations) {
+        final data = stationDoc.data();
+        final stationLat = data['latitude'];
+        final stationLng = data['longitude'];
+        if (stationLat != null && stationLng != null) {
+            final distance = Geolocator.distanceBetween(userLat, userLng, stationLat, stationLng);
+            stationsWithDistances.add(StationWithDistance(stationDoc: stationDoc, distanceInMeters: distance));
+        }
+    }
+    stationsWithDistances.sort((a, b) => a.distanceInMeters.compareTo(b.distanceInMeters));
+    if (mounted) setState(() => _sortedStations = stationsWithDistances);
+  }
+
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<DatabaseEvent>(
@@ -207,7 +200,7 @@ class _HomePageState extends State<HomePage> {
         bool isRunning = false;
         bool isLowBattery = false;
         double aiThreshold = 30.0;
-
+        
         if (snapshot.connectionState == ConnectionState.active &&
             snapshot.hasData &&
             snapshot.data?.snapshot.value != null) {
@@ -220,6 +213,14 @@ class _HomePageState extends State<HomePage> {
           aiThreshold =
               (data['aiRecommendationThreshold'] as num?)?.toDouble() ?? 30.0;
           isLowBattery = currentBatteryLevel <= aiThreshold;
+          
+          // --- NEW LOGIC: Update the trend state. It only changes if the direction changes. ---
+          if (currentBatteryLevel < _previousBatteryLevel) {
+            _batteryTrend = BatteryTrend.draining;
+          } else if (currentBatteryLevel > _previousBatteryLevel) {
+            _batteryTrend = BatteryTrend.charging;
+          }
+          // If the level is the same, the trend persists from the previous state.
 
           if (currentBatteryLevel <= aiThreshold && _previousBatteryLevel > aiThreshold) {
             NotificationService.instance.showLowBatteryNotification(currentBatteryLevel);
@@ -256,6 +257,19 @@ class _HomePageState extends State<HomePage> {
           }
         }
 
+        // --- NEW LOGIC: Determine color based on the persistent trend state ---
+        final Color batteryColor;
+        switch (_batteryTrend) {
+          case BatteryTrend.charging:
+            batteryColor = Colors.green.shade700;
+            break;
+          case BatteryTrend.draining:
+            batteryColor = Colors.red.shade700;
+            break;
+          default: // stable
+            batteryColor = Colors.black;
+        }
+
         return SingleChildScrollView(
           padding: const EdgeInsets.all(16.0),
           child: Column(
@@ -273,7 +287,7 @@ class _HomePageState extends State<HomePage> {
               ],
               _buildSectionTitle('Battery Status'),
               const SizedBox(height: 8),
-              _buildBatteryStatus(batteryLevel, _currentLocationName),
+              _buildBatteryStatus(batteryLevel, _currentLocationName, batteryColor),
               const SizedBox(height: 24),
               _buildLiveTrackingCard(isRunning),
               const SizedBox(height: 16),
@@ -289,7 +303,6 @@ class _HomePageState extends State<HomePage> {
                 },
               ),
               const SizedBox(height: 24),
-
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 crossAxisAlignment: CrossAxisAlignment.center,
@@ -298,10 +311,9 @@ class _HomePageState extends State<HomePage> {
                   TextButton(
                     onPressed: () {
                       if (_sortedStations.isNotEmpty) {
-                        // --- USE THE NESTED NAVIGATOR ---
                         widget.navigatorKey.currentState!.push(
                           MaterialPageRoute(
-                            builder: (_) => AllStationsStatusPage(
+                            builder: (_) => NearbyStationsPage(
                               stations: _sortedStations,
                               email: widget.email,
                             ),
@@ -320,7 +332,6 @@ class _HomePageState extends State<HomePage> {
                 ],
               ),
               const SizedBox(height: 8),
-
               NearbyStationsWidget(
                 email: widget.email,
                 onStationsSorted: (sortedList) {
@@ -332,7 +343,6 @@ class _HomePageState extends State<HomePage> {
                     }
                   });
                 },
-                 // --- PASS THE NAVIGATOR KEY ---
                 navigatorKey: widget.navigatorKey,
               ),
               const SizedBox(height: 24),
@@ -378,7 +388,6 @@ class _HomePageState extends State<HomePage> {
     );
   }
   
-  // ... (All other _build helper methods remain unchanged)
   Widget _buildLowBatteryWarning(
       {required double batteryLevel,
       required VoidCallback onFindStations,
@@ -433,10 +442,10 @@ class _HomePageState extends State<HomePage> {
           const SizedBox(height: 16),
           ElevatedButton.icon(
             icon: _isAiLoading
-                ? Container(
+                ? const SizedBox(
                     width: 20,
                     height: 20,
-                    child: const CircularProgressIndicator(
+                    child: CircularProgressIndicator(
                         strokeWidth: 2, color: Colors.white))
                 : const Icon(Icons.auto_awesome, size: 20),
             label: Text(_isAiLoading ? 'Checking...' : 'Check It Out'),
@@ -477,18 +486,23 @@ class _HomePageState extends State<HomePage> {
             fontSize: 22, fontWeight: FontWeight.bold, color: Colors.black87));
   }
 
-  Widget _buildBatteryStatus(int batteryLevel, String locationName) {
+  Widget _buildBatteryStatus(int batteryLevel, String locationName, Color batteryColor) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('$batteryLevel%',
-            style: const TextStyle(
-                fontSize: 36,
-                fontWeight: FontWeight.bold,
-                color: Colors.black)),
+        Text(
+          '$batteryLevel%',
+          style: TextStyle(
+            fontSize: 36,
+            fontWeight: FontWeight.bold,
+            color: batteryColor,
+          ),
+        ),
         const SizedBox(height: 4),
-        Text('Current Location: $locationName',
-            style: TextStyle(fontSize: 16, color: Colors.grey[600])),
+        Text(
+          'Current Location: $locationName',
+          style: TextStyle(fontSize: 16, color: Colors.grey[600]),
+        ),
       ],
     );
   }
@@ -610,23 +624,28 @@ class EVUserDashboard extends StatefulWidget {
     this.triggerAiRecommendation = false,
   });
 
+  static EVUserDashboardState? of(BuildContext context) =>
+      context.findAncestorStateOfType<EVUserDashboardState>();
+
   @override
-  State<EVUserDashboard> createState() => _EVUserDashboardState();
+  State<EVUserDashboard> createState() => EVUserDashboardState();
 }
 
-class _EVUserDashboardState extends State<EVUserDashboard> {
+class EVUserDashboardState extends State<EVUserDashboard> {
   int _selectedIndex = 0;
   String? _email;
   bool _isLoading = true;
   bool _shouldTriggerAi = false;
   bool _setupDialogOpen = false;
   
-  // --- 1. ADD NAVIGATOR KEYS FOR EACH TAB ---
-  final _homeNavigatorKey = GlobalKey<NavigatorState>();
+  final GlobalKey<HomePageState> homePageStateKey = GlobalKey<HomePageState>();
+  final GlobalKey<NavigatorState> _homeNavigatorKey = GlobalKey<NavigatorState>();
   final _mapNavigatorKey = GlobalKey<NavigatorState>();
   final _historyNavigatorKey = GlobalKey<NavigatorState>();
   final _profileNavigatorKey = GlobalKey<NavigatorState>();
 
+  LatLng? _mapDestination;
+  String? _mapDestinationStationId;
 
   @override
   void initState() {
@@ -635,26 +654,56 @@ class _EVUserDashboardState extends State<EVUserDashboard> {
     _initializeAndCheckProfile();
   }
 
-  // ... (methods _ensureRtdbVehicleNodeExists, _initializeAndCheckProfile, _showProfileSetupDialog remain unchanged)
-  Future<void> _ensureRtdbVehicleNodeExists(String email) async {
+  void navigateToMapWithDestination(LatLng destination, String stationId) {
+    setState(() {
+      _mapDestination = destination;
+      _mapDestinationStationId = stationId;
+      _selectedIndex = 1; 
+    });
+  }
+  
+  void navigateToTab(int index) {
+    setState(() {
+      _selectedIndex = index;
+    });
+  }
+
+  Future<void> triggerAiRecommendation() async {
+    navigateToTab(0);
+    
+    final vehicleRef = FirebaseDatabase.instance.ref('vehicles/${widget.email.replaceAll('.', ',')}');
+    final snapshot = await vehicleRef.get();
+    double batteryLevel = 30.0;
+    if(snapshot.exists) {
+      final data = Map<String, dynamic>.from(snapshot.value as Map);
+      batteryLevel = (data['batteryLevel'] as num?)?.toDouble() ?? 30.0;
+    }
+    
+    homePageStateKey.currentState?.findBestStationPublic(batteryLevel);
+  }
+
+  void _clearMapDestination() {
+    if (mounted && (_mapDestination != null || _mapDestinationStationId != null)) {
+      setState(() {
+        _mapDestination = null;
+        _mapDestinationStationId = null;
+      });
+    }
+  }
+
+  Future<void> _ensureRtdbVehicleNodeExists(String email) async { 
     try {
       final encodedEmail = email.replaceAll('.', ',');
       final ref = FirebaseDatabase.instance.ref('vehicles/$encodedEmail');
       final snapshot = await ref.get();
-
       if (!snapshot.exists) {
         final userDoc = await FirebaseFirestore.instance.collection('users').doc(email).get();
         final userData = userDoc.data() ?? {};
-
         await ref.set({
-          'email': email,
-          'brand': userData['brand'] ?? '',
-          'variant': userData['variant'] ?? '',
-          'isRunning': false,
-          'batteryLevel': 100,
+          'email': email, 'brand': userData['brand'] ?? '', 'variant': userData['variant'] ?? '',
+          'isRunning': false, 'batteryLevel': 100,
           'aiRecommendationThreshold': userData['aiRecommendationThreshold'] ?? 30.0,
-          'latitude': null,
-          'longitude': null,
+          'latitude': null, 'longitude': null,
         });
       }
     } catch (e) {
@@ -662,7 +711,7 @@ class _EVUserDashboardState extends State<EVUserDashboard> {
     }
   }
 
-  Future<void> _initializeAndCheckProfile() async {
+  Future<void> _initializeAndCheckProfile() async { 
     String emailToUse = widget.email;
     if (emailToUse.isEmpty) {
       final prefs = await SharedPreferences.getInstance();
@@ -672,23 +721,13 @@ class _EVUserDashboardState extends State<EVUserDashboard> {
       if (mounted) setState(() => _isLoading = false);
       return;
     }
-
     _email = emailToUse;
     await _ensureRtdbVehicleNodeExists(emailToUse);
-
     try {
-      final doc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(emailToUse)
-          .get();
+      final doc = await FirebaseFirestore.instance.collection('users').doc(emailToUse).get();
       final data = doc.data();
-      if (!doc.exists ||
-          data == null ||
-          data['brand'] == null ||
-          (data['brand'] as String).isEmpty) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) _showProfileSetupDialog();
-        });
+      if (!doc.exists || data == null || data['brand'] == null || (data['brand'] as String).isEmpty) {
+        WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) _showProfileSetupDialog(); });
       }
     } catch (e) {
       print("Error checking profile completion: $e");
@@ -698,7 +737,7 @@ class _EVUserDashboardState extends State<EVUserDashboard> {
     }
   }
 
-  Future<void> _showProfileSetupDialog() async {
+  Future<void> _showProfileSetupDialog() async { 
     if (_setupDialogOpen || !mounted) return;
     _setupDialogOpen = true;
     await showDialog<void>(
@@ -717,9 +756,26 @@ class _EVUserDashboardState extends State<EVUserDashboard> {
   }
 
   void _onItemTapped(int index) {
-    setState(() {
-      _selectedIndex = index;
-    });
+    if (index == _selectedIndex) {
+      switch (index) {
+        case 0:
+          _homeNavigatorKey.currentState?.popUntil((route) => route.isFirst);
+          break;
+        case 1:
+          _mapNavigatorKey.currentState?.popUntil((route) => route.isFirst);
+          break;
+        case 2:
+          _historyNavigatorKey.currentState?.popUntil((route) => route.isFirst);
+          break;
+        case 3:
+          _profileNavigatorKey.currentState?.popUntil((route) => route.isFirst);
+          break;
+      }
+    } else {
+      setState(() {
+        _selectedIndex = index;
+      });
+    }
   }
 
   AppBar _buildAppBar(BuildContext context) {
@@ -730,7 +786,6 @@ class _EVUserDashboardState extends State<EVUserDashboard> {
       actions: [
         IconButton(
           onPressed: () {
-            // Use the correct navigator key based on the current tab
             final navigatorKey = [
               _homeNavigatorKey,
               _mapNavigatorKey,
@@ -753,7 +808,6 @@ class _EVUserDashboardState extends State<EVUserDashboard> {
 
   @override
   Widget build(BuildContext context) {
-    // --- 2. BUILD THE BODY WITH INDEXEDSTACK AND NAVIGATORS ---
     return Scaffold(
       backgroundColor: const Color(0xFFF8F9FA),
       appBar: _buildAppBar(context),
@@ -765,12 +819,12 @@ class _EVUserDashboardState extends State<EVUserDashboard> {
               : IndexedStack(
                   index: _selectedIndex,
                   children: [
-                    // Each child is now a Navigator
                     Navigator(
                       key: _homeNavigatorKey,
                       onGenerateRoute: (route) => MaterialPageRoute(
                         settings: route,
                         builder: (context) => HomePage(
+                          key: homePageStateKey, 
                           email: _email!,
                           shouldTriggerAi: _shouldTriggerAi,
                           onAiTriggered: () {
@@ -786,7 +840,13 @@ class _EVUserDashboardState extends State<EVUserDashboard> {
                       key: _mapNavigatorKey,
                       onGenerateRoute: (route) => MaterialPageRoute(
                         settings: route,
-                        builder: (context) => LiveMapPage(email: _email!, isEmbedded: true),
+                        builder: (context) => LiveMapPage(
+                          email: _email!,
+                          isEmbedded: true,
+                          destination: _mapDestination,
+                          destinationStationId: _mapDestinationStationId,
+                          onNavigationComplete: _clearMapDestination,
+                        ),
                       ),
                     ),
                     Navigator(

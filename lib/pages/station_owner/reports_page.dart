@@ -1,22 +1,8 @@
+// lib/pages/station_owner/reports_page.dart
 import 'package:flutter/material.dart';
-
-// A mock data model for a charging session.
-// In a real app, you would fetch this data from a 'charging_sessions' collection in Firestore.
-class ChargingSession {
-  final String stationName;
-  final DateTime date;
-  final int durationMinutes;
-  final double energyKWh;
-  final double cost;
-
-  ChargingSession({
-    required this.stationName,
-    required this.date,
-    required this.durationMinutes,
-    required this.energyKWh,
-    required this.cost,
-  });
-}
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:intl/intl.dart';
 
 class ReportsPage extends StatefulWidget {
   const ReportsPage({super.key});
@@ -26,34 +12,34 @@ class ReportsPage extends StatefulWidget {
 }
 
 class _ReportsPageState extends State<ReportsPage> {
-  // In a real app, this list would be populated from a Firestore query.
-  // For now, we leave it empty to show the "zero state".
-  final List<ChargingSession> _sessions = [];
+  String? _ownerEmail;
+  bool _isLoading = true;
 
-  Widget _buildSummaryCard(String title, String value, IconData icon) {
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Icon(icon, size: 30, color: Colors.blueAccent),
-            const SizedBox(height: 8),
-            Text(
-              title,
-              style: TextStyle(color: Colors.grey.shade600, fontSize: 14),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              value,
-              style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
-            ),
-          ],
-        ),
-      ),
-    );
+  @override
+  void initState() {
+    super.initState();
+    _getOwnerEmail();
+  }
+
+  Future<void> _getOwnerEmail() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _ownerEmail = prefs.getString('email');
+      _isLoading = false;
+    });
+  }
+
+  Color _getStatusColor(String status) {
+    switch (status) {
+      case 'New':
+        return Colors.blue.shade600;
+      case 'In Progress':
+        return Colors.orange.shade600;
+      case 'Resolved':
+        return Colors.green.shade600;
+      default:
+        return Colors.grey;
+    }
   }
 
   Widget _buildEmptyState() {
@@ -63,16 +49,16 @@ class _ReportsPageState extends State<ReportsPage> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.bar_chart_outlined, size: 100, color: Colors.grey.shade300),
+            const Icon(Icons.file_open_outlined, size: 100, color: Colors.grey),
             const SizedBox(height: 24),
             Text(
-              'No Reports Available',
+              'No Issues Reported',
               textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.grey.shade800),
+              style: Theme.of(context).textTheme.headlineSmall,
             ),
             const SizedBox(height: 12),
             Text(
-              'Usage reports and analytics for your stations will appear here once there is activity.',
+              'Your submitted issue reports will appear here. Tap the + button to create a new one.',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 16, color: Colors.grey.shade600),
             ),
@@ -84,37 +70,119 @@ class _ReportsPageState extends State<ReportsPage> {
 
   @override
   Widget build(BuildContext context) {
-    // This page is part of the dashboard, so it doesn't need its own Scaffold.
-    // The main dashboard Scaffold provides the structure.
-    return _sessions.isEmpty
-        ? _buildEmptyState()
-        : SingleChildScrollView(
-            padding: const EdgeInsets.all(16.0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                GridView.count(
-                  crossAxisCount: 2,
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(),
-                  crossAxisSpacing: 16,
-                  mainAxisSpacing: 16,
-                  childAspectRatio: 1.5,
-                  children: [
-                    _buildSummaryCard('Revenue (30d)', '\$0.00', Icons.attach_money),
-                    _buildSummaryCard('Sessions (30d)', '0', Icons.ev_station),
-                    _buildSummaryCard('Avg. Duration', '0 min', Icons.timer_outlined),
-                    _buildSummaryCard('Total Energy', '0 kWh', Icons.power),
-                  ],
-                ),
-                const SizedBox(height: 24),
-                const Text(
-                  'Recent Activity',
-                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-                ),
-                // Here you would have a ListView.builder for the _sessions
-              ],
-            ),
-          );
+    return _isLoading
+        ? const Center(child: CircularProgressIndicator())
+        : _ownerEmail == null
+            ? const Center(child: Text('Could not identify user.'))
+            : StreamBuilder<QuerySnapshot>(
+                // --- FIX: REMOVED .orderBy() TO AVOID THE INDEX ERROR ---
+                stream: FirebaseFirestore.instance
+                    .collection('issues')
+                    .where('ownerEmail', isEqualTo: _ownerEmail)
+                    .snapshots(),
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+                  if (snapshot.hasError) {
+                    return Center(child: Text('Error: ${snapshot.error}'));
+                  }
+                  if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+                    return _buildEmptyState();
+                  }
+
+                  // --- FIX: SORT THE RESULTS HERE, IN THE APP'S CODE ---
+                  final issues = snapshot.data!.docs;
+                  issues.sort((a, b) {
+                    final aData = a.data() as Map<String, dynamic>;
+                    final bData = b.data() as Map<String, dynamic>;
+                    final Timestamp? aTimestamp = aData['reportedAt'];
+                    final Timestamp? bTimestamp = bData['reportedAt'];
+                    if (bTimestamp == null) return -1;
+                    if (aTimestamp == null) return 1;
+                    // Sorts newest first
+                    return bTimestamp.compareTo(aTimestamp);
+                  });
+
+                  return ListView.builder(
+                    padding: const EdgeInsets.all(12.0),
+                    itemCount: issues.length,
+                    itemBuilder: (context, index) {
+                      final issue = issues[index].data() as Map<String, dynamic>;
+                      final reportedAt = (issue['reportedAt'] as Timestamp?)?.toDate();
+                      final adminReply = issue['adminReply'] as String?;
+
+                      return Card(
+                        margin: const EdgeInsets.only(bottom: 12),
+                        elevation: 2,
+                        child: Padding(
+                          padding: const EdgeInsets.all(16.0),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      issue['stationName'] ?? 'Unknown Station',
+                                      style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                                    ),
+                                  ),
+                                  Chip(
+                                    label: Text(
+                                      issue['status'] ?? 'Unknown',
+                                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                                    ),
+                                    backgroundColor: _getStatusColor(issue['status'] ?? ''),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                issue['issueCategory'] ?? 'No Category',
+                                style: TextStyle(color: Colors.grey.shade700, fontStyle: FontStyle.italic),
+                              ),
+                              const Divider(height: 24),
+                              Text(
+                                issue['description'] ?? 'No description.',
+                                style: const TextStyle(fontSize: 15),
+                              ),
+                              if (adminReply != null && adminReply.isNotEmpty) ...[
+                                const SizedBox(height: 16),
+                                Container(
+                                  width: double.infinity,
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    color: Colors.blue.shade50,
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(color: Colors.blue.shade200)
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      const Text("Admin's Reply:", style: TextStyle(fontWeight: FontWeight.bold)),
+                                      const SizedBox(height: 4),
+                                      Text(adminReply),
+                                    ],
+                                  ),
+                                )
+                              ],
+                              const SizedBox(height: 16),
+                              Align(
+                                alignment: Alignment.centerRight,
+                                child: Text(
+                                  'Reported: ${reportedAt != null ? DateFormat.yMMMd().add_jm().format(reportedAt) : "N/A"}',
+                                  style: const TextStyle(color: Colors.grey, fontSize: 12),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  );
+                },
+              );
   }
 }

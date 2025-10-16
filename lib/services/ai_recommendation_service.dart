@@ -3,8 +3,11 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:firebase_ai/firebase_ai.dart';
+import 'package:firebase_database/firebase_database.dart';
+// --- MODIFICATION: Import the StationWithDistance class ---
+import 'package:miniproject/pages/evuser/widgets/nearby_stations_widget.dart';
 
-// Helper class to structure charging station data.
+// Helper class to structure charging station data for the AI prompt.
 class StationInfo {
   final String name;
   final double distanceKm;
@@ -42,13 +45,61 @@ class AiRecommendationService {
     print("AI Service Initialized with model: gemini-1.5-flash-latest");
   }
 
+  // --- MAJOR MODIFICATION: The service now fetches RTDB data itself ---
   Future<Map<String, dynamic>?> getEVStationRecommendation({
     required String userVehicle,
     required double batteryLevel,
-    required List<StationInfo> nearbyStations,
+    // The method now accepts the full StationWithDistance object to get IDs
+    required List<StationWithDistance> nearbyStations,
   }) async {
-    print("Calling Firebase AI for a ranked recommendation...");
-    final prompt = _buildPrompt(userVehicle, batteryLevel, nearbyStations);
+    print("Calling Firebase AI with real-time slot data...");
+
+    // This list will be populated with live data before being sent to the AI
+    final List<StationInfo> stationsWithRealtimeStatus = [];
+
+    for (final stationWithDist in nearbyStations) {
+      // Get the station ID to query the Realtime Database
+      final stationId = stationWithDist.id;
+      final stationStatusRef = FirebaseDatabase.instance.ref('station_status/$stationId');
+      
+      int availableSlots = 0; // Default to 0 if no data is found
+      try {
+        final snapshot = await stationStatusRef.get();
+        if (snapshot.exists && snapshot.value != null) {
+          final data = snapshot.value;
+          // The data in RTDB is a List of booleans (e.g., [true, false, false])
+          if (data is List) {
+            // Count how many slots are 'true' (available)
+            availableSlots = data.where((slotStatus) => slotStatus == true).length;
+          }
+        }
+      } catch (e) {
+        print("Error fetching RTDB status for station $stationId: $e");
+        // Continue with 0 available slots if there's an error
+      }
+
+      final stationData = stationWithDist.data;
+      final List<dynamic> slotsMetadata = stationData['slots'] ?? [];
+      int maxChargerSpeed = 0;
+      if (slotsMetadata.isNotEmpty) {
+        maxChargerSpeed = slotsMetadata
+            .map<int>((s) => (s['powerKw'] as num?)?.toInt() ?? 0)
+            .reduce((a, b) => a > b ? a : b);
+      }
+
+      // Create the final StationInfo object with the LIVE availableSlots count
+      stationsWithRealtimeStatus.add(
+        StationInfo(
+          name: stationData['name'] ?? 'Unknown',
+          distanceKm: stationWithDist.distanceInMeters / 1000,
+          availableSlots: availableSlots, // <-- Using the real-time value
+          waitingTime: (stationData['waitingTime'] as num?)?.toInt() ?? 0,
+          chargerSpeed: maxChargerSpeed,
+        ),
+      );
+    }
+    
+    final prompt = _buildPrompt(userVehicle, batteryLevel, stationsWithRealtimeStatus);
 
     try {
       final response = await _generateResponse(_model, prompt);
@@ -59,7 +110,6 @@ class AiRecommendationService {
     }
   }
 
-  // --- ROBUSTNESS FIX: Added extensive try-catch and type checking ---
   Future<Map<String, dynamic>> _generateResponse(
       GenerativeModel model, String prompt) async {
     final content = [Content.text(prompt)];
@@ -100,7 +150,6 @@ class AiRecommendationService {
     }
   }
 
-  // --- IMPROVED PROMPT ---
   String _buildPrompt(String userVehicle, double batteryLevel, List<StationInfo> nearbyStations) {
     return """
     You are an expert AI assistant for an EV charging app. Your goal is to recommend the top 3 best charging stations for a user in ranked order.

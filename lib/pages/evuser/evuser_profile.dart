@@ -2,9 +2,12 @@
 
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:cloud_firestore/cloud_firestore.dart'; // <-- FIXED a typo here
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_database/firebase_database.dart';
 import '../../routes/app_routes.dart'; // Import your app routes
+import 'report_issue_page.dart';
+import 'faq_page.dart';
 
 class EVUserProfile extends StatefulWidget {
   const EVUserProfile({super.key});
@@ -313,8 +316,9 @@ class _EVUserProfileState extends State<EVUserProfile> {
                         icon: Icons.help_outline,
                         title: "Help & FAQ",
                         onTap: () {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Help & FAQ page coming soon!')),
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(builder: (context) => const FaqPage()),
                           );
                         },
                       ),
@@ -323,8 +327,9 @@ class _EVUserProfileState extends State<EVUserProfile> {
                         icon: Icons.bug_report_outlined,
                         title: "Report an Issue",
                         onTap: () {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Issue reporting feature coming soon!')),
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(builder: (context) => const ReportIssuePage()),
                           );
                         },
                       ),
@@ -440,10 +445,16 @@ class _EVUserProfileState extends State<EVUserProfile> {
             ),
           );
           if (shouldLogout == true) {
+            // Sign out from all services to ensure a clean slate.
+            await FirebaseAuth.instance.signOut();
             final prefs = await SharedPreferences.getInstance();
             await prefs.clear();
+
+            // Use the root navigator to ensure we are replacing the entire dashboard screen,
+            // not just the content of the profile tab.
             if (mounted) {
-              Navigator.of(context).pushNamedAndRemoveUntil(AppRoutes.landing, (route) => false);
+              Navigator.of(context, rootNavigator: true)
+                  .pushNamedAndRemoveUntil(AppRoutes.landing, (route) => false);
             }
           }
         },

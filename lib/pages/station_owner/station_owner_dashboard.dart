@@ -1,3 +1,5 @@
+// lib/pages/station_owner/station_owner_dashboard.dart
+
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -6,7 +8,8 @@ import 'manage_stations_page.dart';
 import 'station_owner_profile_page.dart';
 import 'reports_page.dart';
 import 'request_station_page.dart';
-import 'view_issues_page.dart'; // <-- 1. IMPORT THE NEW ISSUES PAGE
+import 'view_issues_page.dart';
+import 'submit_issue_page.dart'; // <-- IMPORT THE NEW PAGE
 
 class StationOwnerDashboard extends StatefulWidget {
   final String role;
@@ -27,7 +30,7 @@ class _StationOwnerDashboardState extends State<StationOwnerDashboard> {
   void initState() {
     super.initState();
     _pages = [
-      _DashboardHomeView(email: widget.email),
+      _DashboardHomeView(email: widget.email, onNavigate: _onItemTapped),
       const ManageStationsPage(),
       const ReportsPage(),
       StationOwnerProfilePage(email: widget.email),
@@ -82,11 +85,37 @@ class _StationOwnerDashboardState extends State<StationOwnerDashboard> {
       case 1:
         return 'MANAGE STATIONS';
       case 2:
-        return 'REPORTS';
+        return 'REPORTS & ISSUES'; // <-- Updated title
       default:
         return 'DASHBOARD';
     }
   }
+
+  // --- NEW: Helper method to build the correct FloatingActionButton ---
+  Widget? _buildFloatingActionButton() {
+    switch (_selectedIndex) {
+      case 1: // Manage Stations page
+        return FloatingActionButton.extended(
+          onPressed: () {
+            Navigator.push(context, MaterialPageRoute(builder: (_) => const RequestStationPage()));
+          },
+          icon: const Icon(Icons.add),
+          label: const Text('New Station'),
+          backgroundColor: Colors.blueAccent,
+        );
+      case 2: // Reports & Issues page
+        return FloatingActionButton(
+          onPressed: () {
+            Navigator.push(context, MaterialPageRoute(builder: (_) => const SubmitIssuePage()));
+          },
+          backgroundColor: Colors.blueAccent,
+          child: const Icon(Icons.add_comment_outlined),
+        );
+      default:
+        return null; // No FAB on other pages
+    }
+  }
+
 
   @override
   Widget build(BuildContext context) {
@@ -114,16 +143,8 @@ class _StationOwnerDashboardState extends State<StationOwnerDashboard> {
               index: _selectedIndex,
               children: _pages,
             ),
-      floatingActionButton: _selectedIndex == 1
-          ? FloatingActionButton.extended(
-              onPressed: () {
-                Navigator.push(context, MaterialPageRoute(builder: (_) => const RequestStationPage()));
-              },
-              icon: const Icon(Icons.add),
-              label: const Text('New Station'),
-              backgroundColor: Colors.blueAccent,
-            )
-          : null,
+      // --- CHANGE: Use the helper method to conditionally build the FAB ---
+      floatingActionButton: _buildFloatingActionButton(),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _selectedIndex,
         onTap: _onItemTapped,
@@ -142,10 +163,11 @@ class _StationOwnerDashboardState extends State<StationOwnerDashboard> {
   }
 }
 
-// --- WIDGET FOR THE HOME TAB CONTENT (MODIFIED) ---
+// --- The _DashboardHomeView widget remains unchanged from the previous fix ---
 class _DashboardHomeView extends StatefulWidget {
   final String email;
-  const _DashboardHomeView({required this.email});
+  final void Function(int) onNavigate;
+  const _DashboardHomeView({required this.email, required this.onNavigate});
 
   @override
   State<_DashboardHomeView> createState() => _DashboardHomeViewState();
@@ -154,7 +176,6 @@ class _DashboardHomeView extends StatefulWidget {
 class _DashboardHomeViewState extends State<_DashboardHomeView> {
   int _totalStations = 0;
   int _totalChargers = 0;
-  double _totalRevenue = 0.0;
   int _issuesReported = 0;
   bool _isLoading = true;
 
@@ -168,24 +189,21 @@ class _DashboardHomeViewState extends State<_DashboardHomeView> {
     try {
       final stationsQuery =
           await FirebaseFirestore.instance.collection('stations').where('ownerEmail', isEqualTo: widget.email).get();
-      // This will be zero for now, but is ready for a real 'issues' collection.
+      // This will now correctly fetch from the 'issues' collection.
       final issuesQuery = await FirebaseFirestore.instance.collection('issues').where('ownerEmail', isEqualTo: widget.email).get();
 
       int totalChargersCount = 0;
-      double totalRevenueAmount = 0.0;
 
       for (var doc in stationsQuery.docs) {
         final data = doc.data();
         totalChargersCount +=
             (data['totalSlots'] ?? 0) is int ? (data['totalSlots'] ?? 0) as int : ((data['totalSlots'] ?? 0) as num).toInt();
-        totalRevenueAmount += (data['totalRevenue'] ?? 0.0) as double;
       }
 
       if (mounted) {
         setState(() {
           _totalStations = stationsQuery.size;
           _totalChargers = totalChargersCount;
-          _totalRevenue = totalRevenueAmount;
           _issuesReported = issuesQuery.size;
           _isLoading = false;
         });
@@ -262,7 +280,6 @@ class _DashboardHomeViewState extends State<_DashboardHomeView> {
                   children: [
                     _buildSummaryCard(Icons.ev_station_rounded, 'Total Stations', _totalStations.toString()),
                     _buildSummaryCard(Icons.charging_station_rounded, 'Total Chargers', _totalChargers.toString()),
-                    _buildSummaryCard(Icons.payments_rounded, 'Total Revenue', '\$${_totalRevenue.toStringAsFixed(2)}'),
                     _buildSummaryCard(Icons.warning_rounded, 'Issues Reported', _issuesReported.toString()),
                   ],
                 ),
@@ -280,20 +297,17 @@ class _DashboardHomeViewState extends State<_DashboardHomeView> {
                 _buildActionButton(
                   Icons.business_rounded,
                   'Manage Stations',
-                  // This will switch to the 'Stations' tab in the bottom nav bar
-                  () => DefaultTabController.of(context)?.animateTo(1),
+                  () => widget.onNavigate(1),
                 ),
                 _buildActionButton(
                   Icons.bar_chart_rounded,
                   'View Status Reports',
-                  // --- 3. NAVIGATE TO THE NEW REPORTS PAGE ---
-                  () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ReportsPage())),
+                  () => widget.onNavigate(2), // <-- Navigates to the reports tab
                 ),
                 _buildActionButton(
                   Icons.bug_report_rounded,
                   'View Issues',
-                  // --- 4. NAVIGATE TO THE NEW ISSUES PAGE ---
-                  () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ViewIssuesPage())),
+                  () => widget.onNavigate(2), // <-- Also navigates to the reports tab
                 ),
               ],
             ),

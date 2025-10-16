@@ -1,11 +1,14 @@
+// lib/pages/admin/admin_dashboard.dart
+
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
-import '../../routes/app_routes.dart'; // <-- We use this for named routes
+import '../../routes/app_routes.dart';
 import 'ev_user_details_page.dart';
 import 'station_owner_details_page.dart';
-// We no longer need to import station_requests_page.dart here!
+import 'admin_profile_page.dart';
+import 'admin_view_issues_page.dart'; // <-- 1. IMPORT THE NEW PAGE
 
 class AdminDashboard extends StatefulWidget {
   final String role;
@@ -17,8 +20,98 @@ class AdminDashboard extends StatefulWidget {
 
 class _AdminDashboardState extends State<AdminDashboard> {
   int _selectedIndex = 0;
+  late final List<Widget> _pages;
+
+  @override
+  void initState() {
+    super.initState();
+    _pages = [
+      _AdminHomeView(onNavigate: _onItemTapped),
+      const StationOwnerDetailsPage(),
+      // --- 2. REPLACE THE PLACEHOLDER WITH THE NEW PAGE ---
+      const AdminViewIssuesPage(),
+      const AdminProfilePage(),
+    ];
+  }
+
+  void _onItemTapped(int index) {
+    setState(() => _selectedIndex = index);
+  }
+
+  String _getAppBarTitle() {
+    switch (_selectedIndex) {
+      case 0:
+        return 'Admin Dashboard';
+      case 1:
+        return 'Station Owners';
+      // --- 3. UPDATE THE APP BAR TITLE ---
+      case 2:
+        return 'Reported Issues';
+      default:
+        return 'Admin Dashboard';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final appBar = _selectedIndex == 3
+        ? null
+        : AppBar(
+            automaticallyImplyLeading: false,
+            backgroundColor: Colors.white,
+            elevation: 0,
+            centerTitle: true,
+            title: Text(
+              _getAppBarTitle(),
+              style: const TextStyle(
+                color: Colors.black,
+                fontWeight: FontWeight.bold,
+                fontSize: 26,
+              ),
+            ),
+          );
+
+    return Scaffold(
+      backgroundColor: Colors.white,
+      appBar: appBar,
+      body: IndexedStack(
+        index: _selectedIndex,
+        children: _pages,
+      ),
+      bottomNavigationBar: BottomNavigationBar(
+        currentIndex: _selectedIndex,
+        onTap: _onItemTapped,
+        selectedItemColor: Colors.black,
+        unselectedItemColor: Colors.grey,
+        backgroundColor: Colors.white,
+        type: BottomNavigationBarType.fixed,
+        items: const [
+          BottomNavigationBarItem(icon: Icon(Icons.home), label: 'Home'),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.ev_station),
+            label: 'Owners',
+          ),
+          // --- 4. UPDATE THE BOTTOM NAV ITEM ---
+          BottomNavigationBarItem(icon: Icon(Icons.bug_report), label: 'Issues'),
+          BottomNavigationBarItem(icon: Icon(Icons.person), label: 'Profile'),
+        ],
+      ),
+    );
+  }
+}
+
+// The _AdminHomeView widget remains unchanged.
+class _AdminHomeView extends StatefulWidget {
+  final void Function(int) onNavigate;
+  const _AdminHomeView({required this.onNavigate});
+
+  @override
+  State<_AdminHomeView> createState() => _AdminHomeViewState();
+}
+
+class _AdminHomeViewState extends State<_AdminHomeView> {
   int _evUsers = 0;
-  int _stationOwners = 0; // Renamed for clarity
+  int _stationOwners = 0;
   int _pendingRequests = 0;
   Timer? _timer;
 
@@ -27,20 +120,20 @@ class _AdminDashboardState extends State<AdminDashboard> {
     super.initState();
     _fetchAllCounts();
     _timer = Timer.periodic(const Duration(seconds: 5), (timer) {
-      _fetchAllCounts();
+      if (mounted) _fetchAllCounts();
     });
   }
   
-  void _fetchAllCounts() {
-    _fetchEVUserCount();
-    _fetchStationOwnerCount();
-    _fetchPendingRequestsCount();
-  }
-
   @override
   void dispose() {
     _timer?.cancel();
     super.dispose();
+  }
+
+  void _fetchAllCounts() {
+    _fetchEVUserCount();
+    _fetchStationOwnerCount();
+    _fetchPendingRequestsCount();
   }
 
   Future<void> _fetchEVUserCount() async {
@@ -63,32 +156,8 @@ class _AdminDashboardState extends State<AdminDashboard> {
           .collection('station_requests')
           .where('status', isEqualTo: 'pending')
           .get();
-      if (mounted) {
-        setState(() {
-          _pendingRequests = snap.size;
-        });
-      }
-    } catch (e) {
-      print("Error fetching pending requests: $e");
-    }
-  }
-
-  void _onItemTapped(int index) {
-    setState(() => _selectedIndex = index);
-    switch (index) {
-      case 0:
-        break;
-      case 1:
-        // This navigation is also direct, but let's keep it for now for consistency
-        Navigator.push(context, MaterialPageRoute(builder: (context) => const StationOwnerDetailsPage()));
-        break;
-      case 2:
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Navigate to Reports')));
-        break;
-      case 3:
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Navigate to Profile')));
-        break;
-    }
+      if (mounted) setState(() => _pendingRequests = snap.size);
+    } catch (e) { print("Error fetching pending requests: $e"); }
   }
 
   Widget _buildSummaryCard(String title, String value, {VoidCallback? onTap}) {
@@ -149,106 +218,54 @@ class _AdminDashboardState extends State<AdminDashboard> {
       ),
     );
   }
-
+  
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.white,
-      appBar: AppBar(
-        automaticallyImplyLeading: false,
-        backgroundColor: Colors.white,
-        elevation: 0,
-        centerTitle: true,
-        title: const Text(
-          'Admin Dashboard',
-          style: TextStyle(
-            color: Colors.black,
-            fontWeight: FontWeight.bold,
-            fontSize: 26,
-          ),
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.logout, color: Colors.black),
-            onPressed: () async {
-              final prefs = await SharedPreferences.getInstance();
-              await prefs.clear();
-              Navigator.pushReplacementNamed(context, AppRoutes.landing);
-            },
-            tooltip: 'Logout',
-          ),
-        ],
-      ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            GridView.count(
-              crossAxisCount: 2,
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              crossAxisSpacing: 16,
-              mainAxisSpacing: 16,
-              childAspectRatio: 1.4,
-              children: [
-                _buildSummaryCard('EV Users', _evUsers.toString()),
-                _buildSummaryCard('Station Owners', _stationOwners.toString()),
-                _buildSummaryCard(
-                  'Station Requests',
-                  _pendingRequests.toString(),
-                  onTap: () {
-                    // --- 4. USE THE NAMED ROUTE ---
-                    Navigator.pushNamed(context, AppRoutes.stationRequests);
-                  },
-                ),
-                _buildSummaryCard('History', '12'),
-              ],
-            ),
-            const SizedBox(height: 32),
-            const Text(
-              'Quick Actions',
-              style: TextStyle(
-                fontSize: 22,
-                fontWeight: FontWeight.bold,
-                color: Colors.black,
+    return SingleChildScrollView(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          GridView.count(
+            crossAxisCount: 2,
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            crossAxisSpacing: 16,
+            mainAxisSpacing: 16,
+            childAspectRatio: 1.4,
+            children: [
+              _buildSummaryCard('EV Users', _evUsers.toString()),
+              _buildSummaryCard('Station Owners', _stationOwners.toString()),
+              _buildSummaryCard(
+                'Station Requests',
+                _pendingRequests.toString(),
+                onTap: () => Navigator.pushNamed(context, AppRoutes.stationRequests),
               ),
-            ),
-            const SizedBox(height: 16),
-            _buildActionButton('Review Station Requests', () {
-              // --- 5. USE THE NAMED ROUTE HERE TOO ---
-              Navigator.pushNamed(context, AppRoutes.stationRequests);
-            }),
-            _buildActionButton('Manage Station Owners', () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const StationOwnerDetailsPage()),
-              );
-            }),
-            _buildActionButton('User Management', () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const EvUserDetailsPage()),
-              );
-            }),
-          ],
-        ),
-      ),
-      bottomNavigationBar: BottomNavigationBar(
-        currentIndex: _selectedIndex,
-        onTap: _onItemTapped,
-        selectedItemColor: Colors.black,
-        unselectedItemColor: Colors.grey,
-        backgroundColor: Colors.white,
-        type: BottomNavigationBarType.fixed,
-        items: const [
-          BottomNavigationBarItem(icon: Icon(Icons.home), label: 'Home'),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.ev_station),
-            label: 'Stations',
+              _buildSummaryCard('History', '12'), // Placeholder
+            ],
           ),
-          BottomNavigationBarItem(icon: Icon(Icons.history), label: 'Reports'),
-          BottomNavigationBarItem(icon: Icon(Icons.person), label: 'Profile'),
+          const SizedBox(height: 32),
+          const Text(
+            'Quick Actions',
+            style: TextStyle(
+              fontSize: 22,
+              fontWeight: FontWeight.bold,
+              color: Colors.black,
+            ),
+          ),
+          const SizedBox(height: 16),
+          _buildActionButton('Review Station Requests', () {
+            Navigator.pushNamed(context, AppRoutes.stationRequests);
+          }),
+          _buildActionButton('Manage Station Owners', () {
+            widget.onNavigate(1);
+          }),
+          _buildActionButton('User Management', () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (context) => const EvUserDetailsPage()),
+            );
+          }),
         ],
       ),
     );

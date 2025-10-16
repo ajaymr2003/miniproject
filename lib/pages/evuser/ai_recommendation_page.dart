@@ -1,12 +1,13 @@
 // lib/pages/evuser/ai_recommendation_page.dart
-// ... (imports remain the same)
+
 import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
+// --- MODIFICATION: Import Firebase Realtime Database ---
+import 'package:firebase_database/firebase_database.dart'; 
 import 'widgets/nearby_stations_widget.dart';
 import 'live_map_page.dart';
-// ...
+import 'evuser_dashboard.dart';
 
-// ... (formatDistance function remains the same)
 String formatDistance(double? meters) {
   if (meters == null) return 'N/A';
   if (meters < 1000) {
@@ -17,7 +18,6 @@ String formatDistance(double? meters) {
 }
 
 class AiRecommendationPage extends StatelessWidget {
-  // ... (properties remain the same)
   final String reason;
   final List<StationWithDistance> recommendedStations;
   final String email;
@@ -31,7 +31,6 @@ class AiRecommendationPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // ... (build method structure remains the same)
     return Scaffold(
       backgroundColor: Colors.grey.shade100,
       appBar: AppBar(
@@ -56,7 +55,6 @@ class AiRecommendationPage extends StatelessWidget {
     );
   }
 
-  // ... (_buildHeader and _buildNoResults remain the same)
   Widget _buildHeader() {
     return Padding(
       padding: const EdgeInsets.only(bottom: 24.0),
@@ -106,12 +104,13 @@ class AiRecommendationPage extends StatelessWidget {
     );
   }
 
-
+  // --- MAJOR MODIFICATION: This card now uses a StreamBuilder for live data ---
   Widget _buildStationCard(BuildContext context, StationWithDistance stationDetails, int rank) {
-    // ... (card structure remains the same)
     final data = stationDetails.data;
     final stationName = data['name'] ?? 'Unknown Station';
     final address = data['address'] ?? 'No address provided';
+    final stationId = stationDetails.stationDoc.id;
+    final stationStatusRef = FirebaseDatabase.instance.ref('station_status/$stationId');
 
     return Card(
       margin: const EdgeInsets.only(bottom: 16),
@@ -151,7 +150,34 @@ class AiRecommendationPage extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 12),
-            _buildStationInfoRow(stationDetails),
+            // Use a StreamBuilder to get and display live slot availability
+            StreamBuilder<DatabaseEvent>(
+              stream: stationStatusRef.onValue,
+              builder: (context, snapshot) {
+                // Fallback values from Firestore
+                int totalSlots = (data['totalSlots'] as num?)?.toInt() ?? 0;
+                int availableSlots = (data['availableSlots'] as num?)?.toInt() ?? 0;
+                String slotsText = '$availableSlots / $totalSlots free';
+
+                // If stream is loading, show a placeholder
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  slotsText = 'Loading...';
+                }
+
+                // If stream has active data, parse it
+                if (snapshot.hasData && snapshot.data?.snapshot.value != null) {
+                  final rtdbData = snapshot.data!.snapshot.value;
+                  if (rtdbData is List) {
+                    totalSlots = rtdbData.length;
+                    availableSlots = rtdbData.where((s) => s == true).length;
+                    slotsText = '$availableSlots / $totalSlots free';
+                  }
+                }
+                
+                // Build the info row with the latest data
+                return _buildStationInfoRow(stationDetails, slotsText);
+              },
+            ),
             const Divider(height: 20),
             Row(
               mainAxisAlignment: MainAxisAlignment.end,
@@ -168,17 +194,14 @@ class AiRecommendationPage extends StatelessWidget {
                     final lat = data['latitude'];
                     final lng = data['longitude'];
                     if (lat != null && lng != null) {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => LiveMapPage(
-                            email: email,
-                            destination: LatLng(lat, lng),
-                            // --- PASS THE STATION ID HERE ---
-                            destinationStationId: stationDetails.stationDoc.id,
-                          ),
-                        ),
+                      // Navigate using the dashboard's main map tab
+                      final dashboardState = EVUserDashboard.of(context);
+                      dashboardState?.navigateToMapWithDestination(
+                        LatLng(lat, lng),
+                        stationId,
                       );
+                      // Pop this recommendation page
+                      Navigator.of(context).pop();
                     }
                   },
                 ),
@@ -190,12 +213,8 @@ class AiRecommendationPage extends StatelessWidget {
     );
   }
 
-  // ... (_buildStationInfoRow remains the same)
-  Widget _buildStationInfoRow(StationWithDistance stationDetails) {
-    final data = stationDetails.data;
-    final availableSlots = (data['availableSlots'] as num?)?.toInt() ?? 0;
-    final totalSlots = (data['totalSlots'] as num?)?.toInt() ?? 0;
-
+  // --- MODIFICATION: This helper now accepts the final slots text ---
+  Widget _buildStationInfoRow(StationWithDistance stationDetails, String slotsText) {
     return Row(
       mainAxisAlignment: MainAxisAlignment.start,
       children: [
@@ -208,7 +227,7 @@ class AiRecommendationPage extends StatelessWidget {
         const SizedBox(width: 12),
         Chip(
           avatar: Icon(Icons.electric_bolt_outlined, size: 16, color: Colors.green.shade800),
-          label: Text('$availableSlots / $totalSlots free'),
+          label: Text(slotsText), // Use the live text passed in
           backgroundColor: Colors.green.withOpacity(0.1),
           side: BorderSide.none,
         ),

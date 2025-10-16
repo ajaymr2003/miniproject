@@ -2,10 +2,13 @@
 
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_database/firebase_database.dart'; // <-- IMPORT RTDB
+import 'package:firebase_database/firebase_database.dart';
 import 'package:latlong2/latlong.dart';
+
+// --- MODIFICATION: Import the dashboard to access its state ---
+import 'evuser_dashboard.dart'; 
 import 'widgets/nearby_stations_widget.dart';
-import 'live_map_page.dart';
+// Note: We no longer need to import live_map_page.dart here
 
 String formatDistance(double? meters) {
   if (meters == null) return 'N/A';
@@ -28,12 +31,9 @@ class StationDetailsPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // We use the static data from Firestore for non-changing fields
     final stationData = station.data;
     final stationName = stationData['name'] ?? 'Unknown Station';
     final imageUrl = stationData['imageUrl'];
-
-    // Get the RTDB reference for real-time status
     final stationStatusRef = FirebaseDatabase.instance.ref('station_status/${station.id}');
 
     return Scaffold(
@@ -78,7 +78,6 @@ class StationDetailsPage extends StatelessWidget {
                     ),
             ),
           ),
-          // The main content is now wrapped in a StreamBuilder for RTDB
           SliverToBoxAdapter(
             child: StreamBuilder<DatabaseEvent>(
               stream: stationStatusRef.onValue,
@@ -93,7 +92,6 @@ class StationDetailsPage extends StatelessWidget {
                     availableSlots = data.where((s) => s == true).length;
                   }
                 }
-                // If there's no data yet, Firestore's totalSlots can be a fallback
                 else if (stationData['totalSlots'] != null) {
                    totalSlots = (stationData['totalSlots'] as num).toInt();
                 }
@@ -185,20 +183,20 @@ class StationDetailsPage extends StatelessWidget {
                 textStyle:
                     const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
               ),
+              // --- MAJOR CHANGE: This button now communicates with the parent dashboard ---
               onPressed: () {
                 final lat = stationData['latitude'];
                 final lng = stationData['longitude'];
                 if (lat != null && lng != null) {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => LiveMapPage(
-                        email: email,
-                        destination: LatLng(lat, lng),
-                        destinationStationId: station.id,
-                      ),
-                    ),
+                  // Find the dashboard's state in the widget tree
+                  final dashboardState = EVUserDashboard.of(context);
+                  // Call the public method on the dashboard to trigger the tab switch and data pass
+                  dashboardState?.navigateToMapWithDestination(
+                    LatLng(lat, lng),
+                    station.id,
                   );
+                  // Pop this details page to go back to the home tab screen
+                  Navigator.of(context).pop();
                 }
               },
             ),
